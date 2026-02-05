@@ -153,11 +153,33 @@ export default function DetectionResultPage() {
     if (!id) return;
     setGeneratingReport(true);
     try {
-      await generateReport(id);
-      alert('Report generated successfully! (Mock - PDF would be downloaded)');
+      const report = await generateReport(id);
+      // Download the PDF via authenticated fetch
+      if (report.pdfUrl) {
+        const pdfUrlFull = report.pdfUrl.startsWith('http')
+          ? report.pdfUrl
+          : `${api.defaults.baseURL?.replace('/api', '')}${report.pdfUrl}`;
+        const pdfResponse = await fetch(pdfUrlFull, {
+          headers: {
+            'Authorization': `Bearer ${useAuthStore.getState().token}`,
+          },
+        });
+        if (pdfResponse.ok) {
+          const blob = await pdfResponse.blob();
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `report_${id}.pdf`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        } else {
+          console.error('Failed to download PDF:', pdfResponse.status);
+        }
+      }
     } catch (error) {
       console.error('Failed to generate report:', error);
-      alert('Failed to generate report');
     } finally {
       setGeneratingReport(false);
     }
@@ -332,7 +354,7 @@ export default function DetectionResultPage() {
           </button>
         </div>
         <div className="mt-6">
-          <AdaptiveLearner onUpload={() => alert('Adaptive samples submitted (mock)')} />
+          <AdaptiveLearner />
         </div>
       </Card>
     </div>

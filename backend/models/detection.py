@@ -13,7 +13,9 @@ class Anomaly(BaseModel):
         "texture_artifacts",
         "lighting_inconsistency",
         "audio_sync_mismatch",
-        "metadata_tampering"
+        "metadata_tampering",
+        "model_prediction",
+        "general"
     ]
     severity: Literal["low", "medium", "high"]
     description: str
@@ -55,4 +57,11 @@ class DetectionResponse(BaseModel):
     fileUrl: Optional[str] = None
     reportId: str
     detectionId: str
+    audioAnalysis: Optional[dict] = None
+    metadataAnalysis: Optional[dict] = None
+    fingerprint: Optional[dict] = None
+    compressionInfo: Optional[dict] = None
+    emotionMismatch: Optional[dict] = None
+    syncAnalysis: Optional[dict] = None
+    xaiRegions: Optional[List[dict]] = None
 

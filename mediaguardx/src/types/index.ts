@@ -57,7 +57,7 @@ export interface DetectionResult {
 }
 
 export interface Anomaly {
-  type: 'face_blending' | 'texture_artifacts' | 'lighting_inconsistency' | 'audio_sync_mismatch' | 'metadata_tampering';
+  type: 'face_blending' | 'texture_artifacts' | 'lighting_inconsistency' | 'audio_sync_mismatch' | 'metadata_tampering' | 'model_prediction' | 'general';
   severity: 'low' | 'medium' | 'high';
   description: string;
   confidence: number;

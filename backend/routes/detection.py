@@ -9,6 +9,12 @@ from middleware.auth import get_current_user
 from utils.file_handler import save_uploaded_file, get_file_path_for_detection
 from utils.formatters import label_to_status
 from services.model_engine import analyze_media
+from services.audio_analyzer import analyze_audio
+from services.metadata_analyzer import analyze_metadata
+from services.emotion_analyzer import analyze_emotion_mismatch
+from services.sync_analyzer import analyze_sync
+from services.compression_analyzer import analyze_compression
+from services.fingerprint_analyzer import analyze_fingerprint
 from bson import ObjectId
 from datetime import datetime
 import logging
@@ -34,9 +40,24 @@ async def _detect_media(
         # Generate detection ID
         detection_id = str(ObjectId())
         
-        # Analyze media (placeholder model)
+        # Core ML analysis
         analysis_result = await analyze_media(file_path, media_type, detection_id)
-        
+
+        # Multi-layer analysis (run all analyzers)
+        audio_result = await analyze_audio(file_path, media_type)
+        metadata_result = await analyze_metadata(file_path, media_type)
+        emotion_result = await analyze_emotion_mismatch(file_path, media_type)
+        sync_result = await analyze_sync(file_path, media_type)
+        compression_result = await analyze_compression(file_path, media_type)
+        fingerprint_result = await analyze_fingerprint(file_path, media_type)
+
+        analysis_result["audio_analysis"] = audio_result
+        analysis_result["metadata_analysis"] = metadata_result
+        analysis_result["emotion_mismatch"] = emotion_result
+        analysis_result["sync_analysis"] = sync_result
+        analysis_result["compression_info"] = compression_result
+        analysis_result["fingerprint"] = fingerprint_result
+
         # Create detection record
         db = get_database()
         
@@ -63,6 +84,13 @@ async def _detect_media(
             "anomalies": anomalies_dict,
             "heatmap_url": analysis_result["heatmap_url"],
             "metadata": {},
+            "xai_regions": analysis_result.get("xai_regions", []),
+            "audio_analysis": analysis_result.get("audio_analysis"),
+            "metadata_analysis": analysis_result.get("metadata_analysis"),
+            "fingerprint": analysis_result.get("fingerprint"),
+            "compression_info": analysis_result.get("compression_info"),
+            "emotion_mismatch": analysis_result.get("emotion_mismatch"),
+            "sync_analysis": analysis_result.get("sync_analysis"),
             "created_at": datetime.utcnow(),
             "updated_at": datetime.utcnow()
         }
@@ -193,7 +221,7 @@ async def get_detection(
         heatmap_url = f"{base_url}{heatmap_url}" if base_url else heatmap_url
     
     # Format response to match frontend DetectionResult interface
-    return {
+    response = {
         "id": str(detection_dict["_id"]),
         "fileName": detection_dict.get("filename", ""),
         "fileType": detection_dict.get("media_type", "image"),
@@ -206,8 +234,18 @@ async def get_detection(
         "metadata": {
             "fileSize": detection_dict.get("file_size", 0),
             **detection_dict.get("metadata", {})
-        }
+        },
+        "xaiRegions": detection_dict.get("xai_regions"),
+        "audioAnalysis": detection_dict.get("audio_analysis"),
+        "metadataAnalysis": detection_dict.get("metadata_analysis"),
+        "fingerprint": detection_dict.get("fingerprint"),
+        "compressionInfo": detection_dict.get("compression_info"),
+        "emotionMismatch": detection_dict.get("emotion_mismatch"),
+        "syncAnalysis": detection_dict.get("sync_analysis"),
     }
+
+    # Strip None values so frontend sees undefined instead of null
+    return {k: v for k, v in response.items() if v is not None}
 
 
 @router.get("/{detection_id}/file")
@@ -265,6 +303,60 @@ async def get_detection_file(
         media_type=content_type,
         filename=filename
     )
+
+
+@router.post("/adaptive-learning")
+async def submit_adaptive_sample(
+    file: UploadFile = File(...),
+    label: str = "unknown",
+    current_user: User = Depends(get_current_user),
+    request: Request = None,
+):
+    """Submit a new sample for adaptive learning.
+
+    Stores the sample in an 'adaptive_samples' collection for future
+    retraining of the detection model.
+    """
+    try:
+        # Determine media type
+        media_type = "image"
+        if file.content_type and file.content_type.startswith("video/"):
+            media_type = "video"
+        elif file.content_type and file.content_type.startswith("audio/"):
+            media_type = "audio"
+
+        file_path, file_size = await save_uploaded_file(file, media_type, str(current_user.id))
+
+        db = get_database()
+        sample_id = str(ObjectId())
+
+        sample_record = {
+            "_id": ObjectId(sample_id),
+            "user_id": current_user.id,
+            "filename": file.filename,
+            "media_type": media_type,
+            "file_path": get_file_path_for_detection(file_path),
+            "file_size": file_size,
+            "user_label": label,
+            "status": "pending",
+            "created_at": datetime.utcnow(),
+        }
+
+        await db.adaptive_samples.insert_one(sample_record)
+        await _log_activity(current_user.id, "adaptive_sample_submitted", "adaptive_sample", sample_id, request)
+
+        return {
+            "status": "success",
+            "sampleId": sample_id,
+            "message": "Sample submitted for adaptive learning",
+        }
+
+    except Exception as e:
+        logger.error(f"Error submitting adaptive sample: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error submitting adaptive learning sample",
+        )
 
 
 async def _log_activity(user_id, action: str, resource_type: str, resource_id: str, request: Request):

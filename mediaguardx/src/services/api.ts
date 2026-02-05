@@ -113,6 +113,13 @@ export const getDetectionResult = async (detectionId: string): Promise<Detection
     heatmapUrl: heatmapUrl,
     createdAt: data.createdAt,
     metadata: data.metadata || {},
+    audioAnalysis: data.audioAnalysis,
+    metadataAnalysis: data.metadataAnalysis,
+    fingerprint: data.fingerprint,
+    compressionInfo: data.compressionInfo,
+    emotionMismatch: data.emotionMismatch,
+    syncAnalysis: data.syncAnalysis,
+    xaiRegions: data.xaiRegions,
   };
 };
 

@@ -16,8 +16,11 @@ qrcode[pil]==7.4.2
 Pillow==10.1.0
 pytest==7.4.3
 pytest-asyncio==0.21.1
+numpy>=1.24.0
 torch>=2.0.0
 torchvision>=0.15.0
 opencv-python>=4.7.0
 tqdm>=4.65.0
+librosa>=0.10.0
+soundfile>=0.12.0
 

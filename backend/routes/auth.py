@@ -28,13 +28,13 @@ async def register(user_data: UserCreate, request: Request):
     
     # Hash password
     password_hash = get_password_hash(user_data.password)
-    
-    # Create user document
+
+    # Create user document — force role to "user" to prevent privilege escalation
     user_dict = {
         "email": user_data.email,
         "name": user_data.name,
         "password_hash": password_hash,
-        "role": user_data.role,
+        "role": "user",
         "is_active": True,
         "is_locked": False,
         "failed_login_attempts": 0,
