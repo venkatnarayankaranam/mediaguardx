@@ -60,7 +60,7 @@ export default function Landing() {
                 Try Demo
               </Link>
               <Link
-                to="/register"
+                to="/dashboard"
                 className="px-8 py-4 glass border border-primary-600/50 hover:bg-primary-600/10 rounded-lg font-semibold text-lg transition-colors"
               >
                 Generate Report
@@ -168,13 +168,13 @@ export default function Landing() {
               Ready to Get Started?
             </h2>
             <p className="text-lg text-gray-400 mb-8">
-              Join thousands of users protecting themselves from deepfake threats
+              Start detecting deepfakes in your media files now
             </p>
             <Link
-              to="/register"
+              to="/dashboard"
               className="inline-block px-8 py-4 bg-primary-600 hover:bg-primary-500 rounded-lg font-semibold text-lg transition-colors"
             >
-              Sign Up Free
+              Go to Dashboard
             </Link>
           </div>
         </section>

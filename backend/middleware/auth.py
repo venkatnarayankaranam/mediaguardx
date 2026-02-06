@@ -1,58 +1,64 @@
 """Authentication middleware."""
-from fastapi import HTTPException, status, Depends
+from fastapi import HTTPException, status, Depends, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from typing import Optional
 from database import get_database
 from models.user import User
 from utils.auth import decode_access_token
+from datetime import datetime
 import logging
 
 logger = logging.getLogger(__name__)
 
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)
+
+
+# Guest user for unauthenticated access
+def get_guest_user() -> User:
+    """Return a guest user for unauthenticated requests."""
+    return User(
+        _id="guest",
+        email="guest@mediaguardx.local",
+        name="Guest User",
+        password_hash="",
+        role="admin",  # Give full access
+        is_active=True,
+        is_locked=False,
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow()
+    )
 
 
 async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security)
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
 ) -> User:
-    """Get current authenticated user from JWT token."""
+    """Get current authenticated user from JWT token, or guest user if not authenticated."""
+    # If no credentials provided, return guest user
+    if credentials is None:
+        return get_guest_user()
+
     token = credentials.credentials
     payload = decode_access_token(token)
     
     if payload is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Could not validate credentials",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        # Return guest user if token is invalid
+        return get_guest_user()
     
     user_id: str = payload.get("sub")
     if user_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token payload",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        return get_guest_user()
     
     db = get_database()
     from bson import ObjectId
     try:
         user_obj_id = ObjectId(user_id)
     except:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid user ID format",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    
+        return get_guest_user()
+
     user_dict = await db.users.find_one({"_id": user_obj_id})
-    
+
     if user_dict is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User not found",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        return get_guest_user()
     
     # Convert ObjectId to string for Pydantic model
     if "_id" in user_dict:
