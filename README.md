@@ -42,7 +42,28 @@ MediaGuardX is an advanced deepfake detection platform that provides real-time a
 
 - Python 3.10+
 - Node.js 18+
-- MongoDB 6.0+
+- MongoDB 6.0+ (running locally)
+
+## Quick Start (Windows)
+
+Once you have completed the installation steps below, use these scripts to run the project:
+
+```bash
+# Verify your setup is correct
+check-setup.bat
+
+# Start both backend and frontend
+start-all.bat
+```
+
+This opens two terminal windows:
+- **Backend API**: http://localhost:8000
+- **Frontend**: http://localhost:5173
+- **API Docs**: http://localhost:8000/docs
+
+**Alternative**: Run separately
+- Backend only: `start-backend.bat`
+- Frontend only: `start-frontend.bat`
 
 ## Installation
 
