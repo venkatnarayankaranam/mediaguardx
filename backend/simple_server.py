@@ -134,5 +134,12 @@ async def detect_audio(file: UploadFile = File(...)):
 
 if __name__ == "__main__":
     import uvicorn
-    print("Starting Simple MediaGuardX Server on port 8001...")
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+    import sys
+
+    # Default port is 8001, can be changed via command line: python simple_server.py 8002
+    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8001
+
+    print(f"Starting Simple MediaGuardX Server on port {port}...")
+    print(f"API URL: http://localhost:{port}/api")
+    print("Press Ctrl+C to stop")
+    uvicorn.run(app, host="0.0.0.0", port=port)
