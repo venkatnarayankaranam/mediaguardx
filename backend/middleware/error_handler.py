@@ -55,12 +55,17 @@ async def duplicate_key_exception_handler(request: Request, exc: DuplicateKeyErr
 
 async def generic_exception_handler(request: Request, exc: Exception):
     """Handle generic exceptions."""
-    logger.error(f"Unhandled exception: {str(exc)}", exc_info=True)
+    import traceback
+    error_msg = str(exc)
+    error_trace = traceback.format_exc()
+    print(f"ERROR: {error_msg}")
+    print(f"TRACEBACK: {error_trace}")
+    logger.error(f"Unhandled exception: {error_msg}", exc_info=True)
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={
             "error": "Internal server error",
-            "detail": "An unexpected error occurred"
+            "detail": error_msg
         }
     )
 

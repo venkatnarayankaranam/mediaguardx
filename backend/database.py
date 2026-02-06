@@ -201,7 +201,7 @@ async def connect_db():
 async def close_db():
     """Close database connection."""
     global _db
-    if _db and not _use_local:
+    if _db is not None and not _use_local:
         try:
             _db.client.close()
         except:
