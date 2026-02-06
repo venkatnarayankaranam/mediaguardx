@@ -18,7 +18,7 @@ def get_guest_user() -> User:
     """Return a guest user for unauthenticated requests."""
     return User(
         _id="guest",
-        email="guest@mediaguardx.local",
+        email="guest@mediaguardx.dev",
         name="Guest User",
         password_hash="",
         role="admin",  # Give full access

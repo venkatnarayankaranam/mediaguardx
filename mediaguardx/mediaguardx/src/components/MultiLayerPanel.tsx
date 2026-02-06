@@ -27,7 +27,7 @@ export default function MultiLayerPanel({ detection }: Props) {
             <Music className="w-5 h-5 text-gray-300" />
             <h4 className="font-medium text-gray-200">Audio</h4>
           </div>
-          <p className="text-sm text-gray-400">
+          <div className="text-sm text-gray-400">
             {detection.audioAnalysis ? (
               detection.audioAnalysis.cloned ? (
                 <>
@@ -40,7 +40,7 @@ export default function MultiLayerPanel({ detection }: Props) {
             ) : (
               <span>No audio analysis available</span>
             )}
-          </p>
+          </div>
         </div>
 
         <div className="bg-dark-900 p-4 rounded-lg">
@@ -48,7 +48,7 @@ export default function MultiLayerPanel({ detection }: Props) {
             <FileText className="w-5 h-5 text-gray-300" />
             <h4 className="font-medium text-gray-200">Metadata</h4>
           </div>
-          <p className="text-sm text-gray-400">
+          <div className="text-sm text-gray-400">
             {detection.metadataAnalysis ? (
               <>
                 {detection.metadataAnalysis.missingCamera && <div>Missing camera EXIF</div>}
@@ -58,7 +58,7 @@ export default function MultiLayerPanel({ detection }: Props) {
             ) : (
               <span>No metadata issues found</span>
             )}
-          </p>
+          </div>
         </div>
       </div>
     </div>

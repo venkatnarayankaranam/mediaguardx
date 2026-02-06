@@ -51,7 +51,7 @@ export default function LiveCameraDetector({ onAlert }: Props) {
       }
 
       // Connect WebSocket
-      const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
+      const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:8001/api';
       const wsUrl = apiBase.replace(/^http/, 'ws').replace('/api', '') + '/api/live/ws';
 
       const ws = new WebSocket(wsUrl);

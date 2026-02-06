@@ -30,109 +30,77 @@ export default function DetectionResultPage() {
   const [imageBlobUrl, setImageBlobUrl] = useState<string | null>(null);
   const [heatmapBlobUrl, setHeatmapBlobUrl] = useState<string | null>(null);
 
-  // Cleanup blob URLs on unmount
   useEffect(() => {
-    return () => {
-      if (imageBlobUrl) {
-        URL.revokeObjectURL(imageBlobUrl);
-      }
-      if (heatmapBlobUrl) {
-        URL.revokeObjectURL(heatmapBlobUrl);
-      }
-    };
-  }, [imageBlobUrl, heatmapBlobUrl]);
+    let cancelled = false;
+    let localImageBlobUrl: string | null = null;
+    let localHeatmapBlobUrl: string | null = null;
 
-  useEffect(() => {
     const loadDetection = async () => {
       if (!id) return;
 
-      // Always fetch fresh data from backend to avoid blob URL issues
       try {
         const result = await getDetectionResult(id);
-        console.log('Detection result loaded:', {
-          id: result.id,
-          fileUrl: result.fileUrl,
-          heatmapUrl: result.heatmapUrl,
-          status: result.status
-        });
+        if (cancelled) return;
+
         updateDetection(id, result);
         setDetection(result);
-        
+
         // Fetch image file with authentication and create blob URL
         if (result.fileUrl) {
           try {
-            // Use full URL if it's absolute, otherwise use axios instance
-            const imageUrlToFetch = result.fileUrl.startsWith('http') 
-              ? result.fileUrl 
+            const imageUrlToFetch = result.fileUrl.startsWith('http')
+              ? result.fileUrl
               : `${api.defaults.baseURL?.replace('/api', '')}${result.fileUrl}`;
-            
+
             const imageResponse = await fetch(imageUrlToFetch, {
               headers: {
                 'Authorization': `Bearer ${useAuthStore.getState().token}`,
               },
             });
-            
-            if (imageResponse.ok) {
+
+            if (!cancelled && imageResponse.ok) {
               const imageBlob = await imageResponse.blob();
-              const imageUrl = URL.createObjectURL(imageBlob);
-              setImageBlobUrl(imageUrl);
-              console.log('Image blob URL created:', imageUrl);
-            } else {
-              console.error('Failed to fetch image:', imageResponse.status, imageResponse.statusText);
+              localImageBlobUrl = URL.createObjectURL(imageBlob);
+              setImageBlobUrl(localImageBlobUrl);
             }
           } catch (imgError) {
-            console.error('Failed to load image:', imgError);
+            if (!cancelled) console.error('Failed to load image:', imgError);
           }
         }
-        
-        // Fetch heatmap (static file, may not need auth, but try with auth first)
+
+        // Fetch heatmap
         if (result.heatmapUrl) {
           try {
-            // Use full URL if it's absolute, otherwise construct it
             const heatmapUrlToFetch = result.heatmapUrl.startsWith('http')
               ? result.heatmapUrl
               : `${api.defaults.baseURL?.replace('/api', '')}${result.heatmapUrl}`;
-            
-            // Try with auth first, fallback to without auth if it's a static file
+
             const token = useAuthStore.getState().token;
             const headers: HeadersInit = token ? {
               'Authorization': `Bearer ${token}`,
             } : {};
-            
-            const heatmapResponse = await fetch(heatmapUrlToFetch, { headers });
-            
-            if (heatmapResponse.ok) {
+
+            let heatmapResponse = await fetch(heatmapUrlToFetch, { headers });
+
+            // Fallback: try without auth for static files
+            if (!heatmapResponse.ok && token) {
+              heatmapResponse = await fetch(heatmapUrlToFetch);
+            }
+
+            if (!cancelled && heatmapResponse.ok) {
               const heatmapBlob = await heatmapResponse.blob();
-              const heatmapUrl = URL.createObjectURL(heatmapBlob);
-              setHeatmapBlobUrl(heatmapUrl);
-              console.log('Heatmap blob URL created:', heatmapUrl);
-            } else {
-              console.error('Failed to fetch heatmap:', heatmapResponse.status, heatmapResponse.statusText);
-              // Try without auth as fallback (for static files)
-              if (token) {
-                try {
-                  const fallbackResponse = await fetch(heatmapUrlToFetch);
-                  if (fallbackResponse.ok) {
-                    const heatmapBlob = await fallbackResponse.blob();
-                    const heatmapUrl = URL.createObjectURL(heatmapBlob);
-                    setHeatmapBlobUrl(heatmapUrl);
-                    console.log('Heatmap loaded without auth (static file)');
-                  }
-                } catch (e) {
-                  console.error('Failed to load heatmap even without auth:', e);
-                }
-              }
+              localHeatmapBlobUrl = URL.createObjectURL(heatmapBlob);
+              setHeatmapBlobUrl(localHeatmapBlobUrl);
             }
           } catch (heatmapError) {
-            console.error('Failed to load heatmap:', heatmapError);
+            if (!cancelled) console.error('Failed to load heatmap:', heatmapError);
           }
         }
       } catch (error) {
+        if (cancelled) return;
         console.error('Failed to load detection:', error);
-        // If fetch fails, try cached data as fallback
         const cached = getDetection(id);
         if (cached) {
-          // Clean up any blob URLs in cached data
           if (cached.fileUrl && cached.fileUrl.startsWith('blob:')) {
             cached.fileUrl = null;
           }
@@ -142,11 +110,17 @@ export default function DetectionResultPage() {
           setDetection(cached);
         }
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     };
 
     loadDetection();
+
+    return () => {
+      cancelled = true;
+      if (localImageBlobUrl) URL.revokeObjectURL(localImageBlobUrl);
+      if (localHeatmapBlobUrl) URL.revokeObjectURL(localHeatmapBlobUrl);
+    };
   }, [id, getDetection, updateDetection]);
 
   const handleGenerateReport = async () => {

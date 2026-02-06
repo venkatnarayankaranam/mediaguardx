@@ -28,8 +28,8 @@ export default function TrustScoreGauge({ score, size = 200, showLabel = true }:
 
   return (
     <div className="flex flex-col items-center">
-      <div className="relative" style={{ width: size, height: size }}>
-        <ResponsiveContainer width="100%" height="100%">
+      <div className="relative" style={{ width: size, height: size, minWidth: size, minHeight: size }}>
+        <ResponsiveContainer width={size} height={size}>
           <PieChart>
             <Pie
               data={data}

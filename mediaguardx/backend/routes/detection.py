@@ -32,9 +32,11 @@ async def _detect_media(
     current_user: User,
     request: Request
 ) -> DetectionResponse:
-    """Common detection logic for all media types."""
-    import random
+    """Common detection logic for all media types.
 
+    Uses the real ML model engine for trust scores and Grad-CAM heatmaps,
+    and runs all six analyzer services for multi-layer analysis.
+    """
     try:
         # Save uploaded file
         file_path, file_size = await save_uploaded_file(file, media_type, str(current_user.id))
@@ -42,35 +44,62 @@ async def _detect_media(
         # Generate detection ID
         detection_id = str(ObjectId())
 
-        # Generate random trust score for demo (70-95 range for mostly authentic results)
-        trust_score = random.randint(70, 95)
+        # --- Run real ML model engine ---
+        ml_result = await analyze_media(file_path, media_type, detection_id)
+        trust_score = ml_result["trust_score"]
+        label = ml_result["label"]
+        anomalies_list = ml_result.get("anomalies", [])
+        heatmap_url = ml_result.get("heatmap_url")
+        xai_regions = ml_result.get("xai_regions", [])
 
-        # Determine label based on trust score
-        if trust_score >= 80:
-            label = "Authentic"
-        elif trust_score >= 50:
-            label = "Suspicious"
-        else:
-            label = "Deepfake"
-
-        # Create sample anomalies
+        # Convert Anomaly pydantic objects to dicts for storage
         anomalies_dict = []
-        if trust_score < 90:
-            anomalies_dict.append({
-                "type": "compression",
-                "severity": "low",
-                "description": "Minor compression artifacts detected",
-                "confidence": random.randint(60, 80)
-            })
-        if trust_score < 80:
-            anomalies_dict.append({
-                "type": "metadata",
-                "severity": "medium",
-                "description": "Metadata inconsistency detected",
-                "confidence": random.randint(70, 85)
-            })
+        for a in anomalies_list:
+            if hasattr(a, "model_dump"):
+                anomalies_dict.append(a.model_dump())
+            elif isinstance(a, dict):
+                anomalies_dict.append(a)
+            else:
+                anomalies_dict.append({"type": "general", "severity": "medium", "description": str(a), "confidence": 50})
 
-        # Create detection record
+        # --- Run all six multi-layer analyzers in parallel ---
+        import asyncio
+
+        audio_task = analyze_audio(file_path, media_type)
+        metadata_task = analyze_metadata(file_path, media_type)
+        emotion_task = analyze_emotion_mismatch(file_path, media_type)
+        sync_task = analyze_sync(file_path, media_type)
+        compression_task = analyze_compression(file_path, media_type)
+        fingerprint_task = analyze_fingerprint(file_path, media_type)
+
+        (audio_result, metadata_result, emotion_result,
+         sync_result, compression_result, fingerprint_result) = await asyncio.gather(
+            audio_task, metadata_task, emotion_task,
+            sync_task, compression_task, fingerprint_task,
+            return_exceptions=True,
+        )
+
+        # Convert exceptions to None gracefully
+        if isinstance(audio_result, Exception):
+            logger.warning("Audio analyzer error: %s", audio_result)
+            audio_result = None
+        if isinstance(metadata_result, Exception):
+            logger.warning("Metadata analyzer error: %s", metadata_result)
+            metadata_result = None
+        if isinstance(emotion_result, Exception):
+            logger.warning("Emotion analyzer error: %s", emotion_result)
+            emotion_result = None
+        if isinstance(sync_result, Exception):
+            logger.warning("Sync analyzer error: %s", sync_result)
+            sync_result = None
+        if isinstance(compression_result, Exception):
+            logger.warning("Compression analyzer error: %s", compression_result)
+            compression_result = None
+        if isinstance(fingerprint_result, Exception):
+            logger.warning("Fingerprint analyzer error: %s", fingerprint_result)
+            fingerprint_result = None
+
+        # --- Store detection record ---
         db = get_database()
 
         detection_record = {
@@ -83,15 +112,15 @@ async def _detect_media(
             "trust_score": trust_score,
             "label": label,
             "anomalies": anomalies_dict,
-            "heatmap_url": None,
+            "heatmap_url": heatmap_url,
             "metadata": {},
-            "xai_regions": [],
-            "audio_analysis": {"analyzed": True, "score": random.randint(80, 95)},
-            "metadata_analysis": {"analyzed": True, "consistent": trust_score > 75},
-            "fingerprint": {"hash": detection_id[:16]},
-            "compression_info": {"quality": random.randint(70, 95)},
-            "emotion_mismatch": {"detected": trust_score < 70},
-            "sync_analysis": {"in_sync": trust_score > 60},
+            "xai_regions": xai_regions,
+            "audio_analysis": audio_result,
+            "metadata_analysis": metadata_result,
+            "fingerprint": fingerprint_result,
+            "compression_info": compression_result,
+            "emotion_mismatch": emotion_result,
+            "sync_analysis": sync_result,
             "created_at": datetime.utcnow(),
             "updated_at": datetime.utcnow()
         }
@@ -99,7 +128,7 @@ async def _detect_media(
         await db.detections.insert_one(detection_record)
 
         # Build response
-        base_url = str(request.base_url).rstrip('/') if request else "http://localhost:8000"
+        base_url = str(request.base_url).rstrip('/') if request else "http://localhost:8001"
         file_url = f"{base_url}/api/detect/{detection_id}/file"
 
         return DetectionResponse(
@@ -108,10 +137,17 @@ async def _detect_media(
             trustScore=trust_score,
             label=label,
             anomalies=anomalies_dict,
-            heatmapUrl=None,
+            heatmapUrl=heatmap_url,
             fileUrl=file_url,
             reportId="",
-            detectionId=detection_id
+            detectionId=detection_id,
+            audioAnalysis=audio_result,
+            metadataAnalysis=metadata_result,
+            fingerprint=fingerprint_result,
+            compressionInfo=compression_result,
+            emotionMismatch=emotion_result,
+            syncAnalysis=sync_result,
+            xaiRegions=xai_regions,
         )
 
     except ValueError as e:
