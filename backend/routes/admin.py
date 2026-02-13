@@ -1,10 +1,7 @@
-"""Admin routes."""
+"""Admin routes using Supabase."""
 from fastapi import APIRouter, HTTPException, status, Depends, Query
-from typing import Optional
-from database import get_database
-from models.user import User, UserResponse
-from middleware.auth import require_admin
-from bson import ObjectId
+from database import get_supabase
+from middleware.auth import require_admin, AuthenticatedUser
 import logging
 
 logger = logging.getLogger(__name__)
@@ -14,75 +11,174 @@ router = APIRouter()
 
 @router.get("/users")
 async def get_all_users(
-    current_user: User = Depends(require_admin),
+    current_user: AuthenticatedUser = Depends(require_admin),
     limit: int = Query(50, le=100),
-    skip: int = Query(0, ge=0)
+    offset: int = Query(0, ge=0),
 ):
     """Get all users (admin only)."""
-    db = get_database()
-    
-    cursor = db.users.find().sort("created_at", -1).skip(skip).limit(limit)
-    users = await cursor.to_list(length=limit)
-    
-    total = await db.users.count_documents({})
-    
-    user_list = []
-    for user_dict in users:
-        user_list.append(UserResponse(
-            id=str(user_dict["_id"]),
-            email=user_dict["email"],
-            name=user_dict["name"],
-            role=user_dict["role"],
-            is_active=user_dict.get("is_active", True),
-            created_at=user_dict.get("created_at")
-        ))
-    
+    supabase = get_supabase()
+
+    resp = supabase.table("profiles").select("*", count="exact").order("created_at", desc=True).range(offset, offset + limit - 1).execute()
+
+    users = []
+    for profile in resp.data or []:
+        users.append({
+            "id": profile["id"],
+            "email": profile["email"],
+            "name": profile["name"],
+            "role": profile["role"],
+            "is_active": profile.get("is_active", True),
+            "avatar_url": profile.get("avatar_url"),
+            "created_at": profile.get("created_at"),
+        })
+
     return {
-        "users": user_list,
-        "total": total,
+        "users": users,
+        "total": resp.count or 0,
         "limit": limit,
-        "skip": skip
+        "offset": offset,
     }
+
+
+@router.put("/users/{user_id}/role")
+async def update_user_role(
+    user_id: str,
+    role: str = Query(..., regex="^(user|investigator|admin)$"),
+    current_user: AuthenticatedUser = Depends(require_admin),
+):
+    """Update a user's role (admin only)."""
+    supabase = get_supabase()
+
+    resp = supabase.table("profiles").update({"role": role}).eq("id", user_id).execute()
+
+    if not resp.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    # Log activity
+    _log_activity(supabase, current_user.id, "role_changed", "user", user_id, {"new_role": role})
+
+    return {"message": "Role updated", "user_id": user_id, "role": role}
+
+
+@router.put("/users/{user_id}/status")
+async def update_user_status(
+    user_id: str,
+    is_active: bool = Query(...),
+    current_user: AuthenticatedUser = Depends(require_admin),
+):
+    """Toggle user active status (admin only)."""
+    supabase = get_supabase()
+
+    resp = supabase.table("profiles").update({"is_active": is_active}).eq("id", user_id).execute()
+
+    if not resp.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    _log_activity(supabase, current_user.id, "status_changed", "user", user_id, {"is_active": is_active})
+
+    return {"message": "Status updated", "user_id": user_id, "is_active": is_active}
+
+
+@router.delete("/users/{user_id}")
+async def delete_user(
+    user_id: str,
+    current_user: AuthenticatedUser = Depends(require_admin),
+):
+    """Delete a user (admin only). Removes profile and auth user."""
+    supabase = get_supabase()
+
+    # Prevent self-deletion
+    if user_id == current_user.id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot delete your own account")
+
+    # Delete profile (cascade will handle detections/reports)
+    supabase.table("profiles").delete().eq("id", user_id).execute()
+
+    # Delete auth user
+    try:
+        supabase.auth.admin.delete_user(user_id)
+    except Exception as e:
+        logger.warning(f"Could not delete auth user {user_id}: {e}")
+
+    _log_activity(supabase, current_user.id, "user_deleted", "user", user_id)
+
+    return {"message": "User deleted", "user_id": user_id}
 
 
 @router.get("/stats")
-async def get_stats(current_user: User = Depends(require_admin)):
+async def get_stats(current_user: AuthenticatedUser = Depends(require_admin)):
     """Get system statistics (admin only)."""
-    db = get_database()
-    
-    total_users = await db.users.count_documents({})
-    total_detections = await db.detections.count_documents({})
-    total_reports = await db.reports.count_documents({})
-    
+    supabase = get_supabase()
+
+    # Count users
+    users_resp = supabase.table("profiles").select("id", count="exact").execute()
+    total_users = users_resp.count or 0
+
+    # Count detections
+    det_resp = supabase.table("detections").select("id", count="exact").execute()
+    total_detections = det_resp.count or 0
+
+    # Count reports
+    rep_resp = supabase.table("reports").select("id", count="exact").execute()
+    total_reports = rep_resp.count or 0
+
     # Count by media type
-    image_count = await db.detections.count_documents({"media_type": "image"})
-    video_count = await db.detections.count_documents({"media_type": "video"})
-    audio_count = await db.detections.count_documents({"media_type": "audio"})
-    
+    image_resp = supabase.table("detections").select("id", count="exact").eq("media_type", "image").execute()
+    video_resp = supabase.table("detections").select("id", count="exact").eq("media_type", "video").execute()
+    audio_resp = supabase.table("detections").select("id", count="exact").eq("media_type", "audio").execute()
+
     # Count by label
-    authentic_count = await db.detections.count_documents({"label": "Authentic"})
-    suspicious_count = await db.detections.count_documents({"label": "Suspicious"})
-    deepfake_count = await db.detections.count_documents({"label": "Deepfake"})
-    
+    auth_resp = supabase.table("detections").select("id", count="exact").eq("label", "Authentic").execute()
+    susp_resp = supabase.table("detections").select("id", count="exact").eq("label", "Suspicious").execute()
+    deep_resp = supabase.table("detections").select("id", count="exact").eq("label", "Deepfake").execute()
+
     return {
-        "users": {
-            "total": total_users
-        },
+        "users": {"total": total_users},
         "detections": {
             "total": total_detections,
             "byType": {
-                "image": image_count,
-                "video": video_count,
-                "audio": audio_count
+                "image": image_resp.count or 0,
+                "video": video_resp.count or 0,
+                "audio": audio_resp.count or 0,
             },
             "byLabel": {
-                "authentic": authentic_count,
-                "suspicious": suspicious_count,
-                "deepfake": deepfake_count
-            }
+                "authentic": auth_resp.count or 0,
+                "suspicious": susp_resp.count or 0,
+                "deepfake": deep_resp.count or 0,
+            },
         },
-        "reports": {
-            "total": total_reports
-        }
+        "reports": {"total": total_reports},
     }
 
+
+@router.get("/activity-logs")
+async def get_activity_logs(
+    current_user: AuthenticatedUser = Depends(require_admin),
+    limit: int = Query(50, le=200),
+    offset: int = Query(0, ge=0),
+):
+    """Get activity logs (admin only)."""
+    supabase = get_supabase()
+
+    resp = supabase.table("activity_logs").select("*", count="exact").order("created_at", desc=True).range(offset, offset + limit - 1).execute()
+
+    return {
+        "logs": resp.data or [],
+        "total": resp.count or 0,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+def _log_activity(supabase, user_id: str, action: str, resource_type: str, resource_id: str, details: dict = None):
+    """Log activity."""
+    try:
+        supabase.table("activity_logs").insert({
+            "user_id": user_id,
+            "action": action,
+            "resource_type": resource_type,
+            "resource_id": resource_id,
+            "details": details,
+        }).execute()
+    except Exception as e:
+        logger.error(f"Error logging activity: {e}")

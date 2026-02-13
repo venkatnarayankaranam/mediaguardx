@@ -2,7 +2,6 @@
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
-from pymongo.errors import DuplicateKeyError
 import logging
 
 logger = logging.getLogger(__name__)
@@ -41,18 +40,6 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     )
 
 
-async def duplicate_key_exception_handler(request: Request, exc: DuplicateKeyError):
-    """Handle MongoDB duplicate key errors."""
-    logger.warning(f"Duplicate key error: {exc}")
-    return JSONResponse(
-        status_code=status.HTTP_409_CONFLICT,
-        content={
-            "error": "Resource already exists",
-            "detail": "A record with this information already exists"
-        }
-    )
-
-
 async def generic_exception_handler(request: Request, exc: Exception):
     """Handle generic exceptions."""
     import traceback
@@ -74,6 +61,4 @@ def setup_error_handlers(app: FastAPI):
     """Setup error handlers for the application."""
     app.add_exception_handler(AppException, app_exception_handler)
     app.add_exception_handler(RequestValidationError, validation_exception_handler)
-    app.add_exception_handler(DuplicateKeyError, duplicate_key_exception_handler)
     app.add_exception_handler(Exception, generic_exception_handler)
-

@@ -1,11 +1,8 @@
-"""Authentication middleware."""
+"""Authentication middleware using Supabase Auth."""
 from fastapi import HTTPException, status, Depends, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from typing import Optional
-from database import get_database
-from models.user import User
-from utils.auth import decode_access_token
-from datetime import datetime
+from database import get_supabase
 import logging
 
 logger = logging.getLogger(__name__)
@@ -13,100 +10,98 @@ logger = logging.getLogger(__name__)
 security = HTTPBearer(auto_error=False)
 
 
-# Guest user for unauthenticated access
-def get_guest_user() -> User:
-    """Return a guest user for unauthenticated requests."""
-    return User(
-        _id="guest",
-        email="guest@mediaguardx.local",
-        name="Guest User",
-        password_hash="",
-        role="admin",  # Give full access
-        is_active=True,
-        is_locked=False,
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow()
-    )
+class AuthenticatedUser:
+    """Represents an authenticated user with profile data."""
+
+    def __init__(self, id: str, email: str, name: str, role: str, is_active: bool = True, avatar_url: str | None = None):
+        self.id = id
+        self.email = email
+        self.name = name
+        self.role = role
+        self.is_active = is_active
+        self.avatar_url = avatar_url
 
 
 async def get_current_user(
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
-) -> User:
-    """Get current authenticated user from JWT token, or guest user if not authenticated."""
-    # If no credentials provided, return guest user
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+) -> AuthenticatedUser:
+    """Verify Supabase JWT and return authenticated user with profile."""
     if credentials is None:
-        return get_guest_user()
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
     token = credentials.credentials
-    payload = decode_access_token(token)
-    
-    if payload is None:
-        # Return guest user if token is invalid
-        return get_guest_user()
-    
-    user_id: str = payload.get("sub")
-    if user_id is None:
-        return get_guest_user()
-    
-    db = get_database()
-    from bson import ObjectId
+    supabase = get_supabase()
+
     try:
-        user_obj_id = ObjectId(user_id)
-    except:
-        return get_guest_user()
+        # Verify the JWT token with Supabase
+        user_response = supabase.auth.get_user(token)
+        if not user_response or not user_response.user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or expired token",
+            )
 
-    user_dict = await db.users.find_one({"_id": user_obj_id})
+        user_id = user_response.user.id
 
-    if user_dict is None:
-        return get_guest_user()
-    
-    # Convert ObjectId to string for Pydantic model
-    if "_id" in user_dict:
-        user_dict["_id"] = str(user_dict["_id"])
-    
-    user = User(**user_dict)
-    
-    # Check if user is active
-    if not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="User account is inactive"
-        )
-    
-    # Check if account is locked
-    if user.is_locked:
-        from datetime import datetime
-        if user.locked_until and user.locked_until > datetime.utcnow():
+        # Fetch profile with role info
+        profile_resp = supabase.table("profiles").select("*").eq("id", user_id).single().execute()
+        profile = profile_resp.data
+
+        if not profile:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User profile not found",
+            )
+
+        if not profile.get("is_active", True):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Account is locked. Please try again later."
+                detail="User account is inactive",
             )
-        else:
-            # Lock expired, unlock the account
-            await db.users.update_one(
-                {"_id": ObjectId(user.id)},
-                {"$set": {"is_locked": False, "failed_login_attempts": 0, "locked_until": None}}
-            )
-    
-    return user
+
+        return AuthenticatedUser(
+            id=profile["id"],
+            email=profile["email"],
+            name=profile["name"],
+            role=profile["role"],
+            is_active=profile.get("is_active", True),
+            avatar_url=profile.get("avatar_url"),
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Auth error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication failed",
+        )
 
 
 async def get_current_active_user(
-    current_user: User = Depends(get_current_user)
-) -> User:
+    current_user: AuthenticatedUser = Depends(get_current_user),
+) -> AuthenticatedUser:
     """Get current active user."""
     return current_user
 
 
 def require_role(allowed_roles: list[str]):
     """Dependency factory for role-based access control."""
-    async def role_checker(current_user: User = Depends(get_current_user)) -> User:
+
+    async def role_checker(
+        current_user: AuthenticatedUser = Depends(get_current_user),
+    ) -> AuthenticatedUser:
         if current_user.role not in allowed_roles:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Access denied. Required roles: {', '.join(allowed_roles)}"
+                detail=f"Access denied. Required roles: {', '.join(allowed_roles)}",
             )
         return current_user
+
     return role_checker
 
 
@@ -114,4 +109,3 @@ def require_role(allowed_roles: list[str]):
 require_admin = require_role(["admin"])
 require_investigator = require_role(["investigator", "admin"])
 require_user = require_role(["user", "investigator", "admin"])
-

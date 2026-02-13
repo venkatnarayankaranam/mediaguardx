@@ -2,7 +2,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse
 import logging
 from contextlib import asynccontextmanager
 import os
@@ -16,7 +15,7 @@ from routes import auth, detection, history, reports, admin, live
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
 
@@ -24,25 +23,23 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan events."""
-    # Startup
     logger.info("Starting MediaGuardX backend...")
     await connect_db()
-    logger.info("Database connected")
+    logger.info("Supabase connected")
     yield
-    # Shutdown
     logger.info("Shutting down MediaGuardX backend...")
     await close_db()
-    logger.info("Database disconnected")
+    logger.info("Supabase disconnected")
 
 
 app = FastAPI(
     title="MediaGuardX API",
     description="Scalable and Autonomous Framework for Deepfake Defense",
-    version="1.0.0",
-    lifespan=lifespan
+    version="2.0.0",
+    lifespan=lifespan,
 )
 
-# CORS Middleware - Allow all origins for development
+# CORS Middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -58,7 +55,6 @@ setup_error_handlers(app)
 setup_rate_limiting(app)
 
 # Static file serving for heatmaps
-# Ensure directory exists before mounting
 os.makedirs(settings.heatmaps_dir, exist_ok=True)
 app.mount("/heatmaps", StaticFiles(directory=settings.heatmaps_dir), name="heatmaps")
 
@@ -76,8 +72,10 @@ async def root():
     """Root endpoint."""
     return {
         "message": "MediaGuardX API",
-        "version": "1.0.0",
-        "status": "operational"
+        "version": "2.0.0",
+        "status": "operational",
+        "auth": "Supabase",
+        "detection": "Sightengine + Heuristic Analyzers",
     }
 
 
@@ -89,10 +87,10 @@ async def health_check():
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(
         "main:app",
         host=settings.host,
         port=settings.port,
-        reload=settings.node_env == "development"
+        reload=settings.node_env == "development",
     )
-

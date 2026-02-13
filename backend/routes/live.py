@@ -1,12 +1,11 @@
 """Live monitoring routes with WebSocket support for real-time frame analysis."""
-from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
-from database import get_database
-from models.user import User
-from middleware.auth import get_current_user
-from services.model_engine import load_model_if_available, _MODEL, _TRANSFORM, _DEVICE, _get_real_class_index, ML_AVAILABLE, get_label_from_score
+from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, Query
+from database import get_supabase
+from middleware.auth import get_current_user, AuthenticatedUser
+from services.sightengine_client import analyze_deepfake_from_bytes
+from config import settings
 import logging
 import base64
-import io
 import uuid
 from datetime import datetime
 
@@ -16,28 +15,44 @@ router = APIRouter()
 
 
 @router.get("/monitor")
-async def live_monitor(current_user: User = Depends(get_current_user)):
+async def live_monitor(current_user: AuthenticatedUser = Depends(get_current_user)):
     """Live camera monitoring status endpoint."""
-    model_loaded = _MODEL is not None or load_model_if_available()
+    api_available = bool(settings.sightengine_api_user and settings.sightengine_api_secret)
     return {
-        "status": "ready" if model_loaded else "no_model",
+        "status": "ready" if api_available else "no_api",
         "wsEndpoint": "/api/live/ws",
-        "modelLoaded": model_loaded,
-        "message": "Connect via WebSocket at /api/live/ws for real-time frame analysis"
+        "apiAvailable": api_available,
+        "message": "Connect via WebSocket at /api/live/ws?token=<supabase_token> for real-time frame analysis",
     }
 
 
 @router.websocket("/ws")
-async def websocket_frame_analysis(websocket: WebSocket):
+async def websocket_frame_analysis(websocket: WebSocket, token: str = Query(None)):
     """WebSocket endpoint for real-time frame analysis.
 
+    Authenticates via ?token= query param (Supabase JWT).
     Client sends base64-encoded JPEG frames.
     Server responds with trust score and label for each frame.
     """
+    # Authenticate via token query param
+    if not token:
+        await websocket.close(code=4001, reason="Authentication required. Pass ?token=<jwt>")
+        return
+
+    supabase = get_supabase()
+    try:
+        user_response = supabase.auth.get_user(token)
+        if not user_response or not user_response.user:
+            await websocket.close(code=4001, reason="Invalid token")
+            return
+    except Exception:
+        await websocket.close(code=4001, reason="Authentication failed")
+        return
+
     await websocket.accept()
     logger.info("WebSocket connection established for live monitoring")
 
-    model_loaded = _MODEL is not None or load_model_if_available()
+    api_available = bool(settings.sightengine_api_user and settings.sightengine_api_secret)
 
     try:
         while True:
@@ -46,49 +61,51 @@ async def websocket_frame_analysis(websocket: WebSocket):
             frame_id = f"frame_{uuid.uuid4().hex[:8]}"
             timestamp = datetime.utcnow().isoformat()
 
-            if not model_loaded or not ML_AVAILABLE:
+            if not api_available:
                 await websocket.send_json({
                     "frameId": frame_id,
                     "timestamp": timestamp,
                     "trustScore": 50.0,
                     "label": "Suspicious",
-                    "status": "no_model",
-                    "message": "No ML model loaded; scores are placeholder"
+                    "status": "no_api",
+                    "message": "Sightengine API not configured; scores are placeholder",
                 })
                 continue
 
             try:
-                import torch
-                import torch.nn.functional as F
-                from PIL import Image
-
                 # Decode base64 JPEG frame
                 image_data = data
                 if image_data.startswith("data:image"):
                     image_data = image_data.split(",", 1)[1]
 
                 image_bytes = base64.b64decode(image_data)
-                img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
 
-                # Run inference
-                inp = _TRANSFORM(img).unsqueeze(0).to(_DEVICE)
-                _MODEL.eval()
-                with torch.no_grad():
-                    logits = _MODEL(inp)
-                    probs = F.softmax(logits, dim=1).cpu().numpy()[0]
+                # Call Sightengine API
+                result = await analyze_deepfake_from_bytes(
+                    image_bytes,
+                    settings.sightengine_api_user,
+                    settings.sightengine_api_secret,
+                )
 
-                idx_real = _get_real_class_index()
-                prob_real = float(probs[idx_real])
-                trust_score = round(prob_real * 100.0, 2)
-                label = get_label_from_score(trust_score)
-
-                await websocket.send_json({
-                    "frameId": frame_id,
-                    "timestamp": timestamp,
-                    "trustScore": trust_score,
-                    "label": label,
-                    "status": "analyzed",
-                })
+                if result["api_available"] and result["trust_score"] is not None:
+                    trust_score = result["trust_score"]
+                    label = "Authentic" if trust_score >= 70 else "Suspicious" if trust_score >= 40 else "Deepfake"
+                    await websocket.send_json({
+                        "frameId": frame_id,
+                        "timestamp": timestamp,
+                        "trustScore": trust_score,
+                        "label": label,
+                        "status": "analyzed",
+                    })
+                else:
+                    await websocket.send_json({
+                        "frameId": frame_id,
+                        "timestamp": timestamp,
+                        "trustScore": 50.0,
+                        "label": "Suspicious",
+                        "status": "api_error",
+                        "message": "Sightengine API returned no result",
+                    })
 
             except Exception as e:
                 logger.warning("Frame analysis error: %s", e)

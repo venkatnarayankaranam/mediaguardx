@@ -1,363 +1,474 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import TrustScoreGauge from '../components/TrustScoreGauge';
-import StatusBadge from '../components/StatusBadge';
-import HeatmapDisplay from '../components/HeatmapDisplay';
-import AnomalyList from '../components/AnomalyList';
-import Card from '../components/Card';
-import MultiLayerPanel from '../components/MultiLayerPanel';
-import ExplainabilityPanel from '../components/ExplainabilityPanel';
-import SocialMediaPanel from '../components/SocialMediaPanel';
-import FingerprintPanel from '../components/FingerprintPanel';
-import EmotionMismatchPanel from '../components/EmotionMismatchPanel';
-import SyncAnalysisPanel from '../components/SyncAnalysisPanel';
-import AdaptiveLearner from '../components/AdaptiveLearner';
-import { getDetectionResult, generateReport } from '../services/api';
-import { useDetectionStore } from '../store/detectionStore';
-import { useAuthStore } from '../store/authStore';
-import api from '../services/api';
-import LoadingSkeleton from '../components/LoadingSkeleton';
-import { Download, FileText, ArrowLeft, CheckCircle, AlertTriangle, XCircle } from 'lucide-react';
-import type { DetectionResult } from '../types';
+import {
+  ArrowLeft,
+  Download,
+  Loader2,
+  AlertTriangle,
+  Fingerprint,
+  FileSearch,
+  Mic,
+  HardDrive,
+  ShieldAlert,
+} from 'lucide-react';
+import { getDetectionResult, generateReport } from '@/services/api';
+import { useToast } from '@/hooks/useToast';
+import Badge from '@/components/ui/Badge';
+import Skeleton from '@/components/ui/Skeleton';
+import TrustScoreGauge from '@/components/TrustScoreGauge';
+import MediaPreview from '@/components/MediaPreview';
+import AnomalyCard from '@/components/AnomalyCard';
+import type { DetectionResult } from '@/types';
 
-export default function DetectionResultPage() {
-  const { id } = useParams<{ id: string }>();
-  const navigate = useNavigate();
-  const { getDetection, updateDetection } = useDetectionStore();
-  const [detection, setDetection] = useState<DetectionResult | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [generatingReport, setGeneratingReport] = useState(false);
-  const [imageBlobUrl, setImageBlobUrl] = useState<string | null>(null);
-  const [heatmapBlobUrl, setHeatmapBlobUrl] = useState<string | null>(null);
+type TabId = 'anomalies' | 'metadata' | 'audio' | 'fingerprint' | 'compression';
 
-  // Cleanup blob URLs on unmount
-  useEffect(() => {
-    return () => {
-      if (imageBlobUrl) {
-        URL.revokeObjectURL(imageBlobUrl);
-      }
-      if (heatmapBlobUrl) {
-        URL.revokeObjectURL(heatmapBlobUrl);
-      }
-    };
-  }, [imageBlobUrl, heatmapBlobUrl]);
+interface TabDefinition {
+  id: TabId;
+  label: string;
+  icon: React.ElementType;
+  visible: boolean;
+}
 
-  useEffect(() => {
-    const loadDetection = async () => {
-      if (!id) return;
+const STATUS_BADGE_VARIANT: Record<DetectionResult['status'], 'success' | 'warning' | 'danger'> = {
+  authentic: 'success',
+  suspected: 'warning',
+  deepfake: 'danger',
+};
 
-      // Always fetch fresh data from backend to avoid blob URL issues
-      try {
-        const result = await getDetectionResult(id);
-        console.log('Detection result loaded:', {
-          id: result.id,
-          fileUrl: result.fileUrl,
-          heatmapUrl: result.heatmapUrl,
-          status: result.status
-        });
-        updateDetection(id, result);
-        setDetection(result);
-        
-        // Fetch image file with authentication and create blob URL
-        if (result.fileUrl) {
-          try {
-            // Use full URL if it's absolute, otherwise use axios instance
-            const imageUrlToFetch = result.fileUrl.startsWith('http') 
-              ? result.fileUrl 
-              : `${api.defaults.baseURL?.replace('/api', '')}${result.fileUrl}`;
-            
-            const imageResponse = await fetch(imageUrlToFetch, {
-              headers: {
-                'Authorization': `Bearer ${useAuthStore.getState().token}`,
-              },
-            });
-            
-            if (imageResponse.ok) {
-              const imageBlob = await imageResponse.blob();
-              const imageUrl = URL.createObjectURL(imageBlob);
-              setImageBlobUrl(imageUrl);
-              console.log('Image blob URL created:', imageUrl);
-            } else {
-              console.error('Failed to fetch image:', imageResponse.status, imageResponse.statusText);
-            }
-          } catch (imgError) {
-            console.error('Failed to load image:', imgError);
-          }
-        }
-        
-        // Fetch heatmap (static file, may not need auth, but try with auth first)
-        if (result.heatmapUrl) {
-          try {
-            // Use full URL if it's absolute, otherwise construct it
-            const heatmapUrlToFetch = result.heatmapUrl.startsWith('http')
-              ? result.heatmapUrl
-              : `${api.defaults.baseURL?.replace('/api', '')}${result.heatmapUrl}`;
-            
-            // Try with auth first, fallback to without auth if it's a static file
-            const token = useAuthStore.getState().token;
-            const headers: HeadersInit = token ? {
-              'Authorization': `Bearer ${token}`,
-            } : {};
-            
-            const heatmapResponse = await fetch(heatmapUrlToFetch, { headers });
-            
-            if (heatmapResponse.ok) {
-              const heatmapBlob = await heatmapResponse.blob();
-              const heatmapUrl = URL.createObjectURL(heatmapBlob);
-              setHeatmapBlobUrl(heatmapUrl);
-              console.log('Heatmap blob URL created:', heatmapUrl);
-            } else {
-              console.error('Failed to fetch heatmap:', heatmapResponse.status, heatmapResponse.statusText);
-              // Try without auth as fallback (for static files)
-              if (token) {
-                try {
-                  const fallbackResponse = await fetch(heatmapUrlToFetch);
-                  if (fallbackResponse.ok) {
-                    const heatmapBlob = await fallbackResponse.blob();
-                    const heatmapUrl = URL.createObjectURL(heatmapBlob);
-                    setHeatmapBlobUrl(heatmapUrl);
-                    console.log('Heatmap loaded without auth (static file)');
-                  }
-                } catch (e) {
-                  console.error('Failed to load heatmap even without auth:', e);
-                }
-              }
-            }
-          } catch (heatmapError) {
-            console.error('Failed to load heatmap:', heatmapError);
-          }
-        }
-      } catch (error) {
-        console.error('Failed to load detection:', error);
-        // If fetch fails, try cached data as fallback
-        const cached = getDetection(id);
-        if (cached) {
-          // Clean up any blob URLs in cached data
-          if (cached.fileUrl && cached.fileUrl.startsWith('blob:')) {
-            cached.fileUrl = null;
-          }
-          if (cached.heatmapUrl && cached.heatmapUrl.startsWith('blob:')) {
-            cached.heatmapUrl = null;
-          }
-          setDetection(cached);
-        }
-      } finally {
-        setLoading(false);
-      }
-    };
+const STATUS_LABELS: Record<DetectionResult['status'], string> = {
+  authentic: 'Authentic',
+  suspected: 'Suspected',
+  deepfake: 'Deepfake',
+};
 
-    loadDetection();
-  }, [id, getDetection, updateDetection]);
+function formatDate(dateString: string): string {
+  return new Date(dateString).toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
 
-  const handleGenerateReport = async () => {
-    if (!id) return;
-    setGeneratingReport(true);
-    try {
-      const report = await generateReport(id);
-      // Download the PDF via authenticated fetch
-      if (report.pdfUrl) {
-        const pdfUrlFull = report.pdfUrl.startsWith('http')
-          ? report.pdfUrl
-          : `${api.defaults.baseURL?.replace('/api', '')}${report.pdfUrl}`;
-        const pdfResponse = await fetch(pdfUrlFull, {
-          headers: {
-            'Authorization': `Bearer ${useAuthStore.getState().token}`,
-          },
-        });
-        if (pdfResponse.ok) {
-          const blob = await pdfResponse.blob();
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = `report_${id}.pdf`;
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-          URL.revokeObjectURL(url);
-        } else {
-          console.error('Failed to download PDF:', pdfResponse.status);
-        }
-      }
-    } catch (error) {
-      console.error('Failed to generate report:', error);
-    } finally {
-      setGeneratingReport(false);
-    }
-  };
+// --- Loading skeleton ---
 
-  const getRecommendation = (status: DetectionResult['status'], trustScore: number) => {
-    if (status === 'authentic') {
-      return {
-        icon: CheckCircle,
-        color: 'text-green-400',
-        bg: 'bg-green-500/10 border-green-500/30',
-        title: 'Media appears authentic',
-        message: 'No significant deepfake indicators were detected. The media can be trusted with high confidence.',
-      };
-    } else if (status === 'suspected') {
-      return {
-        icon: AlertTriangle,
-        color: 'text-amber-400',
-        bg: 'bg-amber-500/10 border-amber-500/30',
-        title: 'Media shows suspicious signs',
-        message: 'Some anomalies were detected. Exercise caution and verify through additional sources if possible.',
-      };
-    } else {
-      return {
-        icon: XCircle,
-        color: 'text-red-400',
-        bg: 'bg-red-500/10 border-red-500/30',
-        title: 'Potential deepfake detected',
-        message: 'Multiple indicators suggest this media may be synthetic. Do not trust this content without verification.',
-      };
-    }
-  };
-
-  if (loading) {
-    return (
-      <div className="max-w-7xl mx-auto">
-        <LoadingSkeleton />
-      </div>
-    );
-  }
-
-  if (!detection) {
-    return (
-      <div className="max-w-7xl mx-auto text-center py-20">
-        <p className="text-gray-400">Detection not found</p>
-      </div>
-    );
-  }
-
-  const recommendation = getRecommendation(detection.status, detection.trustScore);
-  const RecommendationIcon = recommendation.icon;
-
+function ResultSkeleton() {
   return (
-    <div className="max-w-7xl mx-auto space-y-6">
-      <button
-        onClick={() => navigate('/dashboard')}
-        className="flex items-center space-x-2 text-gray-400 hover:text-primary-400 transition-colors mb-4"
-      >
-        <ArrowLeft className="w-5 h-5" />
-        <span>Back to Dashboard</span>
-      </button>
-
+    <div className="max-w-7xl mx-auto space-y-6 animate-fade-in">
+      <Skeleton className="h-8 w-48" variant="text" />
       <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold text-gray-200 mb-2">Detection Result</h1>
-          <p className="text-gray-400">{detection.fileName}</p>
+        <div className="space-y-2">
+          <Skeleton className="h-8 w-72" variant="text" />
+          <Skeleton className="h-4 w-48" variant="text" />
         </div>
-        <StatusBadge status={detection.status} size="lg" />
+        <Skeleton className="h-8 w-24" />
       </div>
-
-      <div className="grid lg:grid-cols-3 gap-6">
-        {/* Trust Score Gauge */}
-        <Card>
-          <h2 className="text-xl font-semibold text-gray-200 mb-6">Trust Score</h2>
-          <div className="flex justify-center">
-            <TrustScoreGauge score={detection.trustScore} size={250} />
-          </div>
-        </Card>
-
-        {/* Media Preview */}
-        <Card className="lg:col-span-2">
-          <h2 className="text-xl font-semibold text-gray-200 mb-4">Media Preview</h2>
-          <div className="aspect-video bg-dark-900 rounded-lg border border-dark-700 flex items-center justify-center overflow-hidden">
-            {detection.fileType === 'image' ? (
-              imageBlobUrl ? (
-                <img
-                  src={imageBlobUrl}
-                  alt={detection.fileName}
-                  className="max-w-full max-h-full object-contain"
-                  onError={(e) => {
-                    console.error('Image failed to load from blob URL:', imageBlobUrl);
-                    console.error('Original fileUrl:', detection.fileUrl);
-                  }}
-                />
-              ) : (
-                <div className="text-center text-gray-500">
-                  <p>Loading image...</p>
-                  <p className="text-sm text-gray-600 mt-2">{detection.fileName}</p>
-                </div>
-              )
-            ) : (
-              <div className="text-center text-gray-500">
-                <p>Video/Audio preview placeholder</p>
-                <p className="text-sm text-gray-600 mt-2">{detection.fileName}</p>
-              </div>
-            )}
-          </div>
-        </Card>
+      <div className="grid lg:grid-cols-2 gap-6">
+        <Skeleton className="aspect-video" />
+        <Skeleton className="h-64" />
       </div>
-
-      {/* Heatmap / Explainability */}
-      <div className="grid lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2">
-          <ExplainabilityPanel detection={detection} heatmapUrl={heatmapBlobUrl} />
-        </div>
-        <div className="space-y-6">
-          <MultiLayerPanel detection={detection} />
-          <SocialMediaPanel detection={detection} />
-        </div>
-      </div>
-
-      {/* Anomalies */}
-      {detection.anomalies.length > 0 && (
-        <Card>
-          <h2 className="text-xl font-semibold text-gray-200 mb-4">Detected Anomalies</h2>
-          <AnomalyList anomalies={detection.anomalies} />
-        </Card>
-      )}
-
-      <div className="grid lg:grid-cols-3 gap-6">
-        <FingerprintPanel detection={detection} />
-        <EmotionMismatchPanel detection={detection} />
-        <SyncAnalysisPanel detection={detection} />
-      </div>
-
-      {/* Recommendation */}
-      <Card className={recommendation.bg}>
-        <div className="flex items-start space-x-4">
-          <RecommendationIcon className={`w-6 h-6 mt-1 ${recommendation.color}`} />
-          <div>
-            <h3 className={`text-lg font-semibold mb-2 ${recommendation.color}`}>
-              {recommendation.title}
-            </h3>
-            <p className="text-gray-300">{recommendation.message}</p>
-          </div>
-        </div>
-      </Card>
-
-      {/* Actions */}
-      <Card>
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-xl font-semibold text-gray-200 mb-2">Actions</h2>
-            <p className="text-gray-400 text-sm">Generate detailed PDF report</p>
-          </div>
-          <button
-            onClick={handleGenerateReport}
-            disabled={generatingReport}
-            className="flex items-center space-x-2 px-6 py-3 bg-primary-600 hover:bg-primary-500 rounded-lg transition-colors disabled:opacity-50"
-          >
-            {generatingReport ? (
-              <>
-                <FileText className="w-5 h-5" />
-                <span>Generating...</span>
-              </>
-            ) : (
-              <>
-                <Download className="w-5 h-5" />
-                <span>Generate Report</span>
-              </>
-            )}
-          </button>
-        </div>
-        <div className="mt-6">
-          <AdaptiveLearner />
-        </div>
-      </Card>
+      <Skeleton className="h-96" />
     </div>
   );
 }
 
+// --- Tab content panels ---
+
+function AnomaliesPanel({ detection }: { detection: DetectionResult }) {
+  if (detection.anomalies.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center py-12 text-center">
+        <ShieldAlert className="w-12 h-12 text-slate-600 mb-3" />
+        <p className="text-slate-400">No anomalies detected</p>
+        <p className="text-sm text-slate-500 mt-1">
+          This media passed all analysis checks.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {detection.anomalies.map((anomaly, index) => (
+        <AnomalyCard key={`${anomaly.type}-${index}`} anomaly={anomaly} />
+      ))}
+    </div>
+  );
+}
+
+function MetadataPanel({ detection }: { detection: DetectionResult }) {
+  const analysis = detection.metadataAnalysis;
+
+  if (!analysis) {
+    return <EmptyTabState message="No metadata analysis available for this media." />;
+  }
+
+  const entries: Array<{ label: string; value: string }> = [
+    { label: 'Missing Camera Info', value: analysis.missingCamera ? 'Yes' : 'No' },
+    { label: 'Irregular Timestamps', value: analysis.irregularTimestamps ? 'Yes' : 'No' },
+    { label: 'Suspicious Compression', value: analysis.suspiciousCompression ? 'Yes' : 'No' },
+  ];
+
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-3">
+        {entries.map((entry) => (
+          <div
+            key={entry.label}
+            className="flex items-center justify-between py-2 border-b border-slate-800/60 last:border-0"
+          >
+            <span className="text-sm text-slate-400">{entry.label}</span>
+            <span className="text-sm font-medium text-slate-200">{entry.value}</span>
+          </div>
+        ))}
+      </div>
+
+      {analysis.details && analysis.details.length > 0 && (
+        <div className="mt-4">
+          <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">
+            Details
+          </h4>
+          <ul className="space-y-1.5">
+            {analysis.details.map((detail, index) => (
+              <li key={index} className="text-sm text-slate-300 flex items-start gap-2">
+                <span className="mt-1.5 w-1.5 h-1.5 rounded-full bg-indigo-500 shrink-0" />
+                {detail}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AudioPanel({ detection }: { detection: DetectionResult }) {
+  const analysis = detection.audioAnalysis;
+
+  if (!analysis) {
+    return <EmptyTabState message="No audio analysis available for this media." />;
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between py-2 border-b border-slate-800/60">
+        <span className="text-sm text-slate-400">Voice Cloning Detected</span>
+        <Badge variant={analysis.cloned ? 'danger' : 'success'}>
+          {analysis.cloned ? 'Yes' : 'No'}
+        </Badge>
+      </div>
+
+      {analysis.score !== undefined && (
+        <div className="flex items-center justify-between py-2 border-b border-slate-800/60">
+          <span className="text-sm text-slate-400">Confidence Score</span>
+          <span className="text-sm font-medium text-slate-200">
+            {Math.round(analysis.score * 100)}%
+          </span>
+        </div>
+      )}
+
+      {analysis.details && analysis.details.length > 0 && (
+        <div className="mt-4">
+          <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">
+            Details
+          </h4>
+          <ul className="space-y-1.5">
+            {analysis.details.map((detail, index) => (
+              <li key={index} className="text-sm text-slate-300 flex items-start gap-2">
+                <span className="mt-1.5 w-1.5 h-1.5 rounded-full bg-indigo-500 shrink-0" />
+                {detail}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FingerprintPanel({ detection }: { detection: DetectionResult }) {
+  const fingerprint = detection.fingerprint;
+
+  if (!fingerprint) {
+    return <EmptyTabState message="No fingerprint data available for this media." />;
+  }
+
+  return (
+    <div className="space-y-4">
+      {fingerprint.source && (
+        <div className="flex items-center justify-between py-2 border-b border-slate-800/60">
+          <span className="text-sm text-slate-400">Suspected Source</span>
+          <span className="text-sm font-medium text-slate-200">{fingerprint.source}</span>
+        </div>
+      )}
+
+      {fingerprint.probability !== undefined && (
+        <div>
+          <div className="flex items-center justify-between text-sm mb-1.5">
+            <span className="text-slate-400">Match Probability</span>
+            <span className="font-medium text-slate-200">
+              {Math.round(fingerprint.probability * 100)}%
+            </span>
+          </div>
+          <div className="h-2 w-full rounded-full bg-slate-800">
+            <div
+              className="h-2 rounded-full bg-indigo-500 transition-all duration-500"
+              style={{ width: `${Math.round(fingerprint.probability * 100)}%` }}
+            />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CompressionPanel({ detection }: { detection: DetectionResult }) {
+  const info = detection.compressionInfo;
+
+  if (!info) {
+    return <EmptyTabState message="No compression data available for this media." />;
+  }
+
+  return (
+    <div className="space-y-4">
+      {info.platform && (
+        <div className="flex items-center justify-between py-2 border-b border-slate-800/60">
+          <span className="text-sm text-slate-400">Platform</span>
+          <span className="text-sm font-medium text-slate-200">{info.platform}</span>
+        </div>
+      )}
+
+      {info.compressionRatio !== undefined && (
+        <div className="flex items-center justify-between py-2 border-b border-slate-800/60">
+          <span className="text-sm text-slate-400">Compression Ratio</span>
+          <span className="text-sm font-medium text-slate-200">
+            {info.compressionRatio.toFixed(2)}
+          </span>
+        </div>
+      )}
+
+      {info.evidence && info.evidence.length > 0 && (
+        <div className="mt-4">
+          <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">
+            Evidence
+          </h4>
+          <ul className="space-y-1.5">
+            {info.evidence.map((item, index) => (
+              <li key={index} className="text-sm text-slate-300 flex items-start gap-2">
+                <span className="mt-1.5 w-1.5 h-1.5 rounded-full bg-indigo-500 shrink-0" />
+                {item}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EmptyTabState({ message }: { message: string }) {
+  return (
+    <div className="flex flex-col items-center justify-center py-12 text-center">
+      <FileSearch className="w-10 h-10 text-slate-600 mb-3" />
+      <p className="text-sm text-slate-400">{message}</p>
+    </div>
+  );
+}
+
+// --- Main page component ---
+
+export default function DetectionResultPage() {
+  const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
+  const toast = useToast();
+
+  const [detection, setDetection] = useState<DetectionResult | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [generatingReport, setGeneratingReport] = useState(false);
+  const [activeTab, setActiveTab] = useState<TabId>('anomalies');
+
+  useEffect(() => {
+    if (!id) return;
+
+    let cancelled = false;
+
+    async function fetchDetection() {
+      try {
+        const result = await getDetectionResult(id!);
+        if (!cancelled) {
+          setDetection(result);
+        }
+      } catch {
+        if (!cancelled) {
+          toast.error('Failed to load detection result.');
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    }
+
+    fetchDetection();
+    return () => { cancelled = true; };
+  }, [id]);
+
+  async function handleGenerateReport() {
+    if (!id) return;
+
+    setGeneratingReport(true);
+    try {
+      await generateReport(id);
+      toast.success('Report generated successfully.');
+    } catch {
+      toast.error('Failed to generate report.');
+    } finally {
+      setGeneratingReport(false);
+    }
+  }
+
+  if (loading) {
+    return <ResultSkeleton />;
+  }
+
+  if (!detection) {
+    return (
+      <div className="max-w-7xl mx-auto flex flex-col items-center justify-center py-20 text-center">
+        <AlertTriangle className="w-12 h-12 text-slate-600 mb-4" />
+        <p className="text-lg text-slate-400">Detection result not found</p>
+        <button
+          onClick={() => navigate('/dashboard')}
+          className="mt-4 btn-ghost text-sm flex items-center gap-2"
+        >
+          <ArrowLeft className="w-4 h-4" />
+          Back to Dashboard
+        </button>
+      </div>
+    );
+  }
+
+  const showAudioTab = detection.fileType === 'video' || detection.fileType === 'audio';
+
+  const tabs: TabDefinition[] = [
+    { id: 'anomalies', label: 'Anomalies', icon: ShieldAlert, visible: true },
+    { id: 'metadata', label: 'Metadata', icon: FileSearch, visible: true },
+    { id: 'audio', label: 'Audio', icon: Mic, visible: showAudioTab },
+    { id: 'fingerprint', label: 'Fingerprint', icon: Fingerprint, visible: true },
+    { id: 'compression', label: 'Compression', icon: HardDrive, visible: true },
+  ];
+
+  const visibleTabs = tabs.filter((tab) => tab.visible);
+
+  function renderTabContent(): React.ReactNode {
+    switch (activeTab) {
+      case 'anomalies':
+        return <AnomaliesPanel detection={detection!} />;
+      case 'metadata':
+        return <MetadataPanel detection={detection!} />;
+      case 'audio':
+        return <AudioPanel detection={detection!} />;
+      case 'fingerprint':
+        return <FingerprintPanel detection={detection!} />;
+      case 'compression':
+        return <CompressionPanel detection={detection!} />;
+      default:
+        return null;
+    }
+  }
+
+  return (
+    <div className="max-w-7xl mx-auto space-y-6 animate-fade-in">
+      {/* Back button */}
+      <button
+        onClick={() => navigate('/dashboard')}
+        className="flex items-center gap-2 text-slate-400 hover:text-indigo-400 transition-colors text-sm"
+      >
+        <ArrowLeft className="w-4 h-4" />
+        Back to Dashboard
+      </button>
+
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <div className="flex items-center gap-3 mb-1">
+            <h1 className="text-2xl font-bold text-slate-100">
+              {detection.fileName}
+            </h1>
+            <Badge variant={STATUS_BADGE_VARIANT[detection.status]}>
+              {STATUS_LABELS[detection.status]}
+            </Badge>
+          </div>
+          <p className="text-sm text-slate-500">
+            {formatDate(detection.createdAt)}
+          </p>
+        </div>
+
+        <button
+          onClick={handleGenerateReport}
+          disabled={generatingReport}
+          className="btn-primary flex items-center gap-2 shrink-0"
+        >
+          {generatingReport ? (
+            <>
+              <Loader2 className="w-4 h-4 animate-spin" />
+              Generating...
+            </>
+          ) : (
+            <>
+              <Download className="w-4 h-4" />
+              Generate Report
+            </>
+          )}
+        </button>
+      </div>
+
+      {/* Two-column layout */}
+      <div className="grid lg:grid-cols-2 gap-6">
+        {/* Left column: Media Preview + Trust Score */}
+        <div className="space-y-6">
+          <MediaPreview
+            url={detection.fileUrl}
+            type={detection.fileType}
+            fileName={detection.fileName}
+          />
+
+          <div className="card flex justify-center py-8">
+            <TrustScoreGauge score={detection.trustScore} size={220} />
+          </div>
+        </div>
+
+        {/* Right column: Tabbed analysis panels */}
+        <div className="card flex flex-col min-h-0">
+          {/* Tab bar */}
+          <div className="flex gap-1 border-b border-slate-800/60 -mx-6 px-6 overflow-x-auto">
+            {visibleTabs.map((tab) => {
+              const Icon = tab.icon;
+              const isActive = activeTab === tab.id;
+
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`flex items-center gap-1.5 px-3 py-2.5 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
+                    isActive
+                      ? 'border-indigo-500 text-indigo-400'
+                      : 'border-transparent text-slate-500 hover:text-slate-300'
+                  }`}
+                >
+                  <Icon className="w-4 h-4" />
+                  {tab.label}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Tab content */}
+          <div className="flex-1 pt-5 overflow-y-auto">
+            {renderTabContent()}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

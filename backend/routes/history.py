@@ -1,11 +1,8 @@
-"""Detection history routes."""
+"""Detection history routes using Supabase."""
 from fastapi import APIRouter, HTTPException, status, Depends, Query
-from typing import List, Optional
-from database import get_database
-from models.user import User
-from middleware.auth import get_current_user, require_investigator
-from bson import ObjectId
-from datetime import datetime
+from typing import Optional
+from database import get_supabase
+from middleware.auth import get_current_user, require_investigator, AuthenticatedUser
 import logging
 
 logger = logging.getLogger(__name__)
@@ -15,97 +12,84 @@ router = APIRouter()
 
 @router.get("/user")
 async def get_user_history(
-    current_user: User = Depends(get_current_user),
+    current_user: AuthenticatedUser = Depends(get_current_user),
     limit: int = Query(50, le=100),
-    skip: int = Query(0, ge=0)
+    offset: int = Query(0, ge=0),
 ):
     """Get detection history for current user."""
-    db = get_database()
-    
-    # Find user's detections
-    cursor = db.detections.find(
-        {"user_id": current_user.id}
-    ).sort("created_at", -1).skip(skip).limit(limit)
-    
-    detections = await cursor.to_list(length=limit)
-    
-    # Format response
+    supabase = get_supabase()
+
+    resp = (
+        supabase.table("detections")
+        .select("*", count="exact")
+        .eq("user_id", current_user.id)
+        .order("created_at", desc=True)
+        .range(offset, offset + limit - 1)
+        .execute()
+    )
+
     results = []
-    for detection in detections:
+    for det in resp.data or []:
         results.append({
-            "id": str(detection["_id"]),
-            "filename": detection.get("filename"),
-            "mediaType": detection.get("media_type"),
-            "trustScore": detection.get("trust_score"),
-            "label": detection.get("label"),
-            "timestamp": detection.get("created_at"),
-            "userId": str(detection.get("user_id")),
-            "decisionNotes": detection.get("decision_notes")
+            "id": det["id"],
+            "filename": det.get("filename"),
+            "mediaType": det.get("media_type"),
+            "trustScore": det.get("trust_score"),
+            "label": det.get("label"),
+            "timestamp": det.get("created_at"),
+            "userId": det.get("user_id"),
         })
-    
-    # Get total count
-    total = await db.detections.count_documents({"user_id": current_user.id})
-    
+
     return {
         "detections": results,
-        "total": total,
+        "total": resp.count or 0,
         "limit": limit,
-        "skip": skip
+        "offset": offset,
     }
 
 
 @router.get("/admin")
 async def get_admin_history(
-    current_user: User = Depends(require_investigator),
+    current_user: AuthenticatedUser = Depends(require_investigator),
     limit: int = Query(50, le=100),
-    skip: int = Query(0, ge=0),
-    user_id: Optional[str] = Query(None)
+    offset: int = Query(0, ge=0),
+    user_id: Optional[str] = Query(None),
 ):
     """Get all detection history (admin/investigator only)."""
-    db = get_database()
-    
-    # Build query
-    query = {}
-    if user_id and current_user.role == "admin":
-        try:
-            query["user_id"] = ObjectId(user_id)
-        except:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid user_id"
-            )
-    
-    # Find detections
-    cursor = db.detections.find(query).sort("created_at", -1).skip(skip).limit(limit)
-    
-    detections = await cursor.to_list(length=limit)
-    
-    # Format response
+    supabase = get_supabase()
+
+    query = supabase.table("detections").select("*", count="exact")
+
+    if user_id:
+        query = query.eq("user_id", user_id)
+
+    resp = query.order("created_at", desc=True).range(offset, offset + limit - 1).execute()
+
     results = []
-    for detection in detections:
-        # Get user info
-        user_dict = await db.users.find_one({"_id": detection.get("user_id")})
-        user_email = user_dict.get("email") if user_dict else "Unknown"
-        
+    for det in resp.data or []:
+        # Get user email
+        user_email = "Unknown"
+        try:
+            profile_resp = supabase.table("profiles").select("email").eq("id", det["user_id"]).single().execute()
+            if profile_resp.data:
+                user_email = profile_resp.data["email"]
+        except Exception:
+            pass
+
         results.append({
-            "id": str(detection["_id"]),
-            "filename": detection.get("filename"),
-            "mediaType": detection.get("media_type"),
-            "trustScore": detection.get("trust_score"),
-            "label": detection.get("label"),
-            "timestamp": detection.get("created_at"),
-            "userId": str(detection.get("user_id")),
+            "id": det["id"],
+            "filename": det.get("filename"),
+            "mediaType": det.get("media_type"),
+            "trustScore": det.get("trust_score"),
+            "label": det.get("label"),
+            "timestamp": det.get("created_at"),
+            "userId": det.get("user_id"),
             "userEmail": user_email,
-            "decisionNotes": detection.get("decision_notes")
         })
-    
-    # Get total count
-    total = await db.detections.count_documents(query)
-    
+
     return {
         "detections": results,
-        "total": total,
+        "total": resp.count or 0,
         "limit": limit,
-        "skip": skip
+        "offset": offset,
     }
-

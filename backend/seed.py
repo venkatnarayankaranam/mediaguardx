@@ -1,63 +1,58 @@
-"""Seed script to create admin user."""
-import asyncio
-from motor.motor_asyncio import AsyncIOMotorClient
-from config import settings
-from utils.auth import get_password_hash
-from datetime import datetime
-import sys
+"""Seed script to create admin user via Supabase."""
+import os
+from dotenv import load_dotenv
+from supabase import create_client
+
+load_dotenv()
 
 
-async def seed_admin():
-    """Create default admin user."""
+def seed_admin():
+    """Create default admin user in Supabase."""
+    url = os.getenv("SUPABASE_URL")
+    key = os.getenv("SUPABASE_SERVICE_KEY")
+
+    if not url or not key:
+        print("Error: SUPABASE_URL and SUPABASE_SERVICE_KEY must be set in .env")
+        return
+
+    supabase = create_client(url, key)
+
+    email = "admin@mediaguardx.com"
+    password = "Admin123!"
+    name = "Admin"
+
     try:
-        # Connect to database
-        client = AsyncIOMotorClient(settings.mongo_url)
-        db = client.get_database()
-        
-        # Check if admin already exists
-        existing_admin = await db.users.find_one({"email": "admin@mediaguardx.com"})
-        if existing_admin:
-            print("Admin user already exists!")
-            print(f"Email: admin@mediaguardx.com")
-            print("Please use a different email or delete the existing admin user.")
-            client.close()
-            return
-        
-        # Create admin user
-        admin_password = "Admin123!"  # Default password - CHANGE IN PRODUCTION
-        password_hash = get_password_hash(admin_password)
-        
-        admin_user = {
-            "email": "admin@mediaguardx.com",
-            "name": "System Administrator",
-            "password_hash": password_hash,
-            "role": "admin",
-            "is_active": True,
-            "is_locked": False,
-            "failed_login_attempts": 0,
-            "created_at": datetime.utcnow(),
-            "updated_at": datetime.utcnow()
-        }
-        
-        result = await db.users.insert_one(admin_user)
-        
-        print("=" * 50)
-        print("Admin user created successfully!")
-        print("=" * 50)
-        print(f"Email: admin@mediaguardx.com")
-        print(f"Password: {admin_password}")
-        print(f"Role: admin")
-        print("=" * 50)
-        print("IMPORTANT: Change the default password after first login!")
-        print("=" * 50)
-        
-        client.close()
-        
+        # Create auth user
+        result = supabase.auth.admin.create_user({
+            "email": email,
+            "password": password,
+            "email_confirm": True,
+            "user_metadata": {"name": name},
+        })
+
+        user_id = result.user.id
+        print(f"Created auth user: {email} (ID: {user_id})")
+
+        # Update profile to admin role
+        supabase.table("profiles").update({"role": "admin"}).eq("id", user_id).execute()
+        print(f"Updated profile role to admin")
+
+        print(f"\nAdmin credentials:")
+        print(f"  Email: {email}")
+        print(f"  Password: {password}")
+        print(f"\nPlease change the password after first login!")
+
     except Exception as e:
-        print(f"Error creating admin user: {e}")
-        sys.exit(1)
+        if "already been registered" in str(e).lower() or "already exists" in str(e).lower():
+            print(f"User {email} already exists. Updating role to admin...")
+            # Find and update existing user
+            profiles = supabase.table("profiles").select("id").eq("email", email).execute()
+            if profiles.data:
+                supabase.table("profiles").update({"role": "admin"}).eq("id", profiles.data[0]["id"]).execute()
+                print("Role updated to admin.")
+        else:
+            print(f"Error: {e}")
 
 
 if __name__ == "__main__":
-    asyncio.run(seed_admin())
-
+    seed_admin()
