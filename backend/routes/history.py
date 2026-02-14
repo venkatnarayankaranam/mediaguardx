@@ -30,13 +30,15 @@ async def get_user_history(
 
     results = []
     for det in resp.data or []:
+        label = det.get("label", "Suspicious")
+        status_map = {"Authentic": "authentic", "Deepfake": "deepfake"}
         results.append({
             "id": det["id"],
-            "filename": det.get("filename"),
-            "mediaType": det.get("media_type"),
+            "fileName": det.get("filename"),
+            "fileType": det.get("media_type"),
             "trustScore": det.get("trust_score"),
-            "label": det.get("label"),
-            "timestamp": det.get("created_at"),
+            "status": status_map.get(label, "suspected"),
+            "createdAt": det.get("created_at"),
             "userId": det.get("user_id"),
         })
 
@@ -76,13 +78,15 @@ async def get_admin_history(
         except Exception:
             pass
 
+        label = det.get("label", "Suspicious")
+        status_map = {"Authentic": "authentic", "Deepfake": "deepfake"}
         results.append({
             "id": det["id"],
-            "filename": det.get("filename"),
-            "mediaType": det.get("media_type"),
+            "fileName": det.get("filename"),
+            "fileType": det.get("media_type"),
             "trustScore": det.get("trust_score"),
-            "label": det.get("label"),
-            "timestamp": det.get("created_at"),
+            "status": status_map.get(label, "suspected"),
+            "createdAt": det.get("created_at"),
             "userId": det.get("user_id"),
             "userEmail": user_email,
         })

@@ -5,3 +5,7 @@ backend/__pycache__/
 backend/**/__pycache__/
 *.pyc
 .venv/
+# Frontend env files (contain Supabase keys)
+mediaguardx/.env
+mediaguardx/mediaguardx/.env
+.env

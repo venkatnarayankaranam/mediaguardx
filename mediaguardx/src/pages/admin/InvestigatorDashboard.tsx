@@ -291,8 +291,8 @@ export default function InvestigatorDashboard() {
                     </Badge>
                   </td>
                   <td className="py-3.5 px-5">
-                    <span className={`text-sm font-semibold ${getTrustScoreColor(item.trustScore)}`}>
-                      {item.trustScore.toFixed(1)}%
+                    <span className={`text-sm font-semibold ${getTrustScoreColor(item.trustScore ?? 0)}`}>
+                      {(item.trustScore ?? 0).toFixed(1)}%
                     </span>
                   </td>
                   <td className="py-3.5 px-5">

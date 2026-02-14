@@ -262,8 +262,8 @@ export default function AdminDashboard() {
                     </div>
                   </div>
                   <div className="text-right flex-shrink-0">
-                    <p className={`text-sm font-semibold ${getTrustScoreColor(detection.trustScore)}`}>
-                      {detection.trustScore.toFixed(1)}%
+                    <p className={`text-sm font-semibold ${getTrustScoreColor(detection.trustScore ?? 0)}`}>
+                      {(detection.trustScore ?? 0).toFixed(1)}%
                     </p>
                     <Badge variant={getStatusBadgeVariant(detection.status)}>
                       {detection.status}

@@ -248,15 +248,26 @@ export const useAuthStore = create<AuthState>()(
         if (!session) return;
 
         try {
-          const { data, error } = await supabase
-            .from('profiles')
-            .select('*')
-            .eq('id', session.user.id)
-            .single();
+          // Fetch profile via backend API to avoid RLS recursion on profiles table
+          const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
+          const response = await fetch(`${API_BASE_URL}/auth/me`, {
+            headers: {
+              'Authorization': `Bearer ${session.access_token}`,
+            },
+          });
 
-          if (error) throw error;
+          if (!response.ok) throw new Error('Failed to fetch profile');
+
+          const data = await response.json();
           if (data) {
-            const profile: Profile = data;
+            const profile: Profile = {
+              id: data.id,
+              email: data.email,
+              name: data.name,
+              role: data.role,
+              is_active: data.is_active,
+              avatar_url: data.avatar_url,
+            };
             const user: User = {
               id: profile.id,
               email: profile.email,

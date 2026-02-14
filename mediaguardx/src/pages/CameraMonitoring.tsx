@@ -2,7 +2,6 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { Camera, CameraOff, Wifi, WifiOff, SlidersHorizontal, Activity, Clock } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import Badge from '@/components/ui/Badge';
-import Skeleton from '@/components/ui/Skeleton';
 
 interface AnalysisResult {
   trustScore: number;
@@ -89,7 +88,9 @@ export default function CameraMonitoring() {
       return;
     }
 
-    const wsUrl = `ws://localhost:8000/api/live/ws?token=${session.access_token}`;
+    const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
+    const wsBase = apiBase.replace(/^http/, 'ws');
+    const wsUrl = `${wsBase}/live/ws?token=${session.access_token}`;
     const ws = new WebSocket(wsUrl);
 
     ws.onopen = () => {

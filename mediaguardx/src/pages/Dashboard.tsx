@@ -102,7 +102,7 @@ export default function Dashboard() {
       try {
         const data = await getUserHistory(5, 0);
         if (!cancelled) {
-          setRecentDetections(Array.isArray(data) ? data : data.detections ?? data.results ?? []);
+          setRecentDetections(Array.isArray(data) ? data : data.detections ?? []);
         }
       } catch {
         if (!cancelled) {

@@ -5,6 +5,7 @@ from database import get_supabase
 from middleware.auth import get_current_user, AuthenticatedUser
 from services.pdf_generator import generate_pdf_report
 import logging
+import os
 import uuid
 
 logger = logging.getLogger(__name__)
@@ -21,8 +22,11 @@ async def generate_report(
     supabase = get_supabase()
 
     # Get detection record
-    det_resp = supabase.table("detections").select("*").eq("id", detection_id).single().execute()
-    detection = det_resp.data
+    try:
+        det_resp = supabase.table("detections").select("*").eq("id", detection_id).single().execute()
+        detection = det_resp.data
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Detection not found")
 
     if not detection:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Detection not found")
@@ -87,14 +91,20 @@ async def download_report(
     """Download PDF report."""
     supabase = get_supabase()
 
-    resp = supabase.table("reports").select("*").eq("id", report_id).single().execute()
-    report = resp.data
+    try:
+        resp = supabase.table("reports").select("*").eq("id", report_id).single().execute()
+        report = resp.data
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found")
 
     if not report:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found")
 
     if report["user_id"] != current_user.id and current_user.role not in ("investigator", "admin"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    if not os.path.exists(report["pdf_path"]):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="PDF file not found")
 
     return FileResponse(
         report["pdf_path"],
@@ -111,8 +121,11 @@ async def get_report(
     """Get report metadata."""
     supabase = get_supabase()
 
-    resp = supabase.table("reports").select("*").eq("id", report_id).single().execute()
-    report = resp.data
+    try:
+        resp = supabase.table("reports").select("*").eq("id", report_id).single().execute()
+        report = resp.data
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found")
 
     if not report:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found")

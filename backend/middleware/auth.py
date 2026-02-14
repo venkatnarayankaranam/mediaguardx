@@ -48,14 +48,32 @@ async def get_current_user(
         user_id = user_response.user.id
 
         # Fetch profile with role info
-        profile_resp = supabase.table("profiles").select("*").eq("id", user_id).single().execute()
-        profile = profile_resp.data
+        try:
+            profile_resp = supabase.table("profiles").select("*").eq("id", user_id).single().execute()
+            profile = profile_resp.data
+        except Exception:
+            profile = None
 
+        # Auto-create profile if it doesn't exist (handles users who registered without trigger)
         if not profile:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="User profile not found",
-            )
+            try:
+                auth_user = user_response.user
+                new_profile = {
+                    "id": user_id,
+                    "email": auth_user.email or "",
+                    "name": (auth_user.user_metadata or {}).get("name") or (auth_user.email or "").split("@")[0],
+                    "role": "user",
+                    "is_active": True,
+                }
+                supabase.table("profiles").insert(new_profile).execute()
+                profile = new_profile
+                logger.info(f"Auto-created profile for user {user_id}")
+            except Exception as e:
+                logger.error(f"Failed to auto-create profile: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="User profile not found",
+                )
 
         if not profile.get("is_active", True):
             raise HTTPException(

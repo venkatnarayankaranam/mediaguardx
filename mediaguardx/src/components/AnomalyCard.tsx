@@ -32,7 +32,10 @@ const TYPE_LABELS: Record<Anomaly['type'], string> = {
 export default function AnomalyCard({ anomaly }: AnomalyCardProps) {
   const [expanded, setExpanded] = useState(false);
 
-  const confidencePercent = Math.round(anomaly.confidence * 100);
+  // confidence comes as 0-100 from backend, not 0-1
+  const confidencePercent = anomaly.confidence > 1
+    ? Math.round(anomaly.confidence)
+    : Math.round(anomaly.confidence * 100);
   const stripeClass = SEVERITY_STRIPE[anomaly.severity];
   const badgeVariant = SEVERITY_BADGE_VARIANT[anomaly.severity];
   const typeLabel = TYPE_LABELS[anomaly.type] ?? anomaly.type;

@@ -1,9 +1,12 @@
 """Detection routes for media analysis using Sightengine + heuristic analyzers."""
-from fastapi import APIRouter, UploadFile, File, HTTPException, status, Depends, Request
+from fastapi import APIRouter, UploadFile, File, HTTPException, status, Depends, Request, Query
 from fastapi.responses import FileResponse
-from typing import Literal
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from typing import Literal, Optional
 from database import get_supabase
 from middleware.auth import get_current_user, AuthenticatedUser
+
+security = HTTPBearer(auto_error=False)
 from utils.file_handler import save_uploaded_file, get_file_path_for_detection
 from services.sightengine_client import analyze_deepfake
 from services.audio_analyzer import analyze_audio
@@ -23,30 +26,83 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Weights for composite scoring
+# Weights for composite scoring – heuristic analyzers get real influence
 WEIGHTS = {
-    "sightengine": 0.55,
-    "metadata": 0.10,
-    "fingerprint": 0.10,
-    "compression": 0.08,
-    "audio": 0.07,
-    "emotion": 0.05,
-    "sync": 0.05,
+    "sightengine": 0.30,
+    "metadata": 0.20,
+    "fingerprint": 0.18,
+    "compression": 0.12,
+    "audio": 0.08,
+    "emotion": 0.06,
+    "sync": 0.06,
 }
 
 
-def _extract_score(result: dict, default: float = 85.0) -> float:
-    """Extract a trust-like score from an analyzer result."""
-    if isinstance(result, dict):
-        # audio_analyzer returns {"cloned": bool, "score": float}
-        if "score" in result:
-            return float(result["score"])
-        # emotion returns {"score": float}
-        if "mismatch_score" in result:
-            return 100.0 - float(result["mismatch_score"])
-        # sync returns {"mismatchScore": float}
-        if "mismatchScore" in result:
-            return 100.0 - float(result["mismatchScore"])
+def _extract_score(result: dict, analyzer_name: str = "", default: float = 85.0) -> float:
+    """Extract a trust-like score (0-100, higher=more authentic) from an analyzer result."""
+    if not isinstance(result, dict):
+        return default
+
+    # Audio analyzer: "score" = clone likelihood (higher = more suspicious), invert it
+    if "cloned" in result and "score" in result:
+        return 100.0 - float(result["score"])
+
+    # Emotion analyzer: "score" = mismatch percentage (higher = more suspicious), invert it
+    if "faceEmotion" in result and "score" in result:
+        return 100.0 - float(result["score"])
+
+    # Sync analyzer: "mismatchScore" = mismatch (higher = more suspicious), invert it
+    if "mismatchScore" in result:
+        return 100.0 - float(result["mismatchScore"])
+
+    # Metadata analyzer: compute trust from flags — aggressive penalties
+    # Missing EXIF is a strong indicator of AI-generated/manipulated content
+    if "missingCamera" in result:
+        score = 100.0
+        if result.get("missingCamera"):
+            score -= 55  # no camera info = very suspicious (AI images never have EXIF)
+        if result.get("irregularTimestamps"):
+            score -= 30
+        if result.get("suspiciousCompression"):
+            score -= 25
+        # Extra penalty if multiple flags are set
+        flags_set = sum([
+            bool(result.get("missingCamera")),
+            bool(result.get("irregularTimestamps")),
+            bool(result.get("suspiciousCompression")),
+        ])
+        if flags_set >= 2:
+            score -= 15  # multi-flag penalty
+        return max(0, score)
+
+    # Fingerprint analyzer: lower trust if deepfake source detected
+    if "probability" in result and "source" in result:
+        prob = float(result.get("probability", 0))
+        if result.get("source"):
+            return max(0, 100.0 - prob * 1.5)  # amplify fingerprint detection
+        # Even without a specific source, frequency-domain anomalies reduce trust
+        if prob > 0:
+            return max(50, 85.0 - prob * 0.5)
+        return 80.0
+
+    # Compression analyzer: derive from compression ratio
+    if "compressionRatio" in result:
+        if result.get("platform"):
+            return 60.0  # social media compressed = less trustworthy
+        evidence = result.get("evidence", [])
+        # Check for blocking artifacts or heavy compression in evidence
+        has_blocking = any("blocking" in str(e).lower() for e in evidence)
+        has_heavy = any("heavy" in str(e).lower() or "very low" in str(e).lower() for e in evidence)
+        if has_blocking and has_heavy:
+            return 50.0
+        if has_blocking or has_heavy:
+            return 65.0
+        return 80.0
+
+    # Generic fallback
+    if "score" in result:
+        return float(result["score"])
+
     return default
 
 
@@ -59,7 +115,12 @@ def _compute_composite_score(
     emotion_result: dict,
     sync_result: dict,
 ) -> float:
-    """Compute weighted composite trust score from all analyzers."""
+    """Compute weighted composite trust score from all analyzers.
+
+    Includes multi-flag penalty: when several heuristic analyzers flag issues
+    simultaneously, the composite score drops more aggressively than the
+    weighted average alone would produce.
+    """
     scores = {}
     total_weight = 0.0
 
@@ -77,7 +138,7 @@ def _compute_composite_score(
         ("emotion", emotion_result),
         ("sync", sync_result),
     ]:
-        s = _extract_score(result)
+        s = _extract_score(result, analyzer_name=name)
         scores[name] = s
         total_weight += WEIGHTS[name]
 
@@ -85,13 +146,36 @@ def _compute_composite_score(
         return 75.0  # Fallback
 
     composite = sum(scores.get(k, 0) * WEIGHTS.get(k, 0) for k in scores) / total_weight
+
+    # --- Multi-flag penalty ---
+    # Count how many heuristic analyzers scored below the "suspicious" threshold
+    suspicious_threshold = 70.0
+    suspicious_analyzers = [
+        name for name in ("metadata", "fingerprint", "compression", "audio", "emotion", "sync")
+        if scores.get(name, 100) < suspicious_threshold
+    ]
+    num_suspicious = len(suspicious_analyzers)
+
+    if num_suspicious >= 3:
+        # 3+ analyzers flagging = strong evidence of manipulation
+        composite -= 20
+        logger.info("Multi-flag penalty: 3+ analyzers suspicious (%s), -20 points", suspicious_analyzers)
+    elif num_suspicious >= 2:
+        # 2 analyzers flagging = moderate concern
+        composite -= 12
+        logger.info("Multi-flag penalty: 2 analyzers suspicious (%s), -12 points", suspicious_analyzers)
+    elif num_suspicious >= 1:
+        # 1 analyzer flagging = slight concern
+        composite -= 5
+        logger.info("Multi-flag penalty: 1 analyzer suspicious (%s), -5 points", suspicious_analyzers)
+
     return round(min(100, max(0, composite)), 2)
 
 
 def _get_label(score: float) -> str:
-    if score >= 70:
+    if score >= 80:
         return "Authentic"
-    elif score >= 40:
+    elif score >= 50:
         return "Suspicious"
     return "Deepfake"
 
@@ -114,10 +198,10 @@ def _build_anomalies(
     """Build anomaly list from analyzer results."""
     anomalies = []
 
-    # Sightengine deepfake probability
-    if sightengine_result.get("api_available") and sightengine_result.get("deepfake_probability", 0) > 0.3:
+    # Sightengine deepfake probability — lower threshold to 0.05 so even mild signals show
+    if sightengine_result.get("api_available") and sightengine_result.get("deepfake_probability", 0) > 0.05:
         prob = sightengine_result["deepfake_probability"]
-        severity = "high" if prob > 0.7 else "medium" if prob > 0.5 else "low"
+        severity = "high" if prob > 0.7 else "medium" if prob > 0.4 else "low"
         anomalies.append({
             "type": "model_prediction",
             "severity": severity,
@@ -131,26 +215,60 @@ def _build_anomalies(
         if metadata_result.get("missingCamera"):
             anomalies.append({
                 "type": "metadata_tampering",
+                "severity": "high",
+                "description": "No camera/EXIF metadata — typical of AI-generated or heavily edited images",
+                "confidence": 85,
+            })
+        if metadata_result.get("irregularTimestamps"):
+            anomalies.append({
+                "type": "metadata_tampering",
                 "severity": "medium",
-                "description": "Camera information missing from metadata",
+                "description": "Timestamp inconsistencies detected in metadata",
                 "confidence": 70,
             })
         if metadata_result.get("suspiciousCompression"):
             anomalies.append({
                 "type": "compression",
-                "severity": "low",
+                "severity": "medium",
                 "description": "Suspicious compression patterns detected",
-                "confidence": 60,
+                "confidence": 65,
             })
 
-    # Fingerprint anomalies
-    if isinstance(fingerprint_result, dict) and fingerprint_result.get("source"):
-        anomalies.append({
-            "type": "general",
-            "severity": "high",
-            "description": f"Deepfake tool signature detected: {fingerprint_result['source']}",
-            "confidence": round(fingerprint_result.get("probability", 0.5) * 100, 1),
-        })
+    # Fingerprint anomalies — also show when probability > 0 even without named source
+    if isinstance(fingerprint_result, dict):
+        if fingerprint_result.get("source"):
+            anomalies.append({
+                "type": "general",
+                "severity": "high",
+                "description": f"Deepfake tool signature detected: {fingerprint_result['source']}",
+                "confidence": round(min(99, fingerprint_result.get("probability", 50)), 1),
+            })
+        elif fingerprint_result.get("probability", 0) > 20:
+            anomalies.append({
+                "type": "general",
+                "severity": "medium",
+                "description": f"Frequency-domain anomalies detected (score: {fingerprint_result['probability']:.0f})",
+                "confidence": round(fingerprint_result.get("probability", 0), 1),
+            })
+
+    # Compression anomalies
+    if isinstance(compression_result, dict):
+        evidence = compression_result.get("evidence", [])
+        if compression_result.get("platform"):
+            anomalies.append({
+                "type": "compression",
+                "severity": "low",
+                "description": f"Compression consistent with {compression_result['platform']} sharing",
+                "confidence": 55,
+            })
+        has_blocking = any("blocking" in str(e).lower() for e in evidence)
+        if has_blocking:
+            anomalies.append({
+                "type": "texture_artifacts",
+                "severity": "medium",
+                "description": "JPEG blocking artifacts detected — possible re-encoding or manipulation",
+                "confidence": 60,
+            })
 
     return anomalies
 
@@ -174,22 +292,24 @@ async def _detect_media(
 
         # Always run metadata, fingerprint, compression
         tasks.append(_safe_analyze(analyze_metadata, file_path, media_type))
-        tasks.append(_safe_analyze(analyze_fingerprint, file_path))
-        tasks.append(_safe_analyze(analyze_compression, file_path))
+        tasks.append(_safe_analyze(analyze_fingerprint, file_path, media_type))
+        tasks.append(_safe_analyze(analyze_compression, file_path, media_type))
 
         # Audio analysis for audio/video
         if media_type in ("audio", "video"):
-            tasks.append(_safe_analyze(analyze_audio, file_path))
+            tasks.append(_safe_analyze(analyze_audio, file_path, media_type))
         else:
-            tasks.append(_default_result({"cloned": False, "score": 90, "details": []}))
+            # score=0 means 0% clone likelihood → 100% trust after inversion
+            tasks.append(_default_result({"cloned": False, "score": 0, "details": ["Not applicable for images"]}))
 
         # Emotion/sync for video
         if media_type == "video":
-            tasks.append(_safe_analyze(analyze_emotion_mismatch, file_path))
-            tasks.append(_safe_analyze(analyze_sync, file_path))
+            tasks.append(_safe_analyze(analyze_emotion_mismatch, file_path, media_type))
+            tasks.append(_safe_analyze(analyze_sync, file_path, media_type))
         else:
-            tasks.append(_default_result({"faceEmotion": None, "audioEmotion": None, "score": 5}))
-            tasks.append(_default_result({"lipSyncMismatch": False, "mismatchScore": 5, "details": []}))
+            # score=0 means 0% mismatch → 100% trust after inversion
+            tasks.append(_default_result({"faceEmotion": None, "audioEmotion": None, "score": 0}))
+            tasks.append(_default_result({"lipSyncMismatch": False, "mismatchScore": 0, "details": []}))
 
         results = await asyncio.gather(*tasks)
 
@@ -330,8 +450,11 @@ async def get_detection(
     """Get detection result by ID."""
     supabase = get_supabase()
 
-    resp = supabase.table("detections").select("*").eq("id", detection_id).single().execute()
-    detection = resp.data
+    try:
+        resp = supabase.table("detections").select("*").eq("id", detection_id).single().execute()
+        detection = resp.data
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Detection not found")
 
     if not detection:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Detection not found")
@@ -373,18 +496,52 @@ async def get_detection(
 @router.get("/{detection_id}/file")
 async def get_detection_file(
     detection_id: str,
-    current_user: AuthenticatedUser = Depends(get_current_user),
+    token: str = None,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
 ):
-    """Get the uploaded file for a detection."""
+    """Get the uploaded file for a detection.
+
+    Supports auth via:
+    - Authorization: Bearer header (normal API calls)
+    - ?token= query param (browser <img>/<video>/<audio> src)
+    """
     supabase = get_supabase()
 
-    resp = supabase.table("detections").select("*").eq("id", detection_id).single().execute()
-    detection = resp.data
+    # Resolve the auth token from header or query param
+    auth_token = None
+    if credentials and credentials.credentials:
+        auth_token = credentials.credentials
+    elif token:
+        auth_token = token
+
+    if not auth_token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+
+    try:
+        user_response = supabase.auth.get_user(auth_token)
+        if not user_response or not user_response.user:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+        user_id = user_response.user.id
+        try:
+            profile_resp = supabase.table("profiles").select("role").eq("id", user_id).single().execute()
+            user_role = profile_resp.data.get("role", "user") if profile_resp.data else "user"
+        except Exception:
+            user_role = "user"
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication failed")
+
+    try:
+        resp = supabase.table("detections").select("*").eq("id", detection_id).single().execute()
+        detection = resp.data
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Detection not found")
 
     if not detection:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Detection not found")
 
-    if detection["user_id"] != current_user.id and current_user.role not in ("investigator", "admin"):
+    if detection["user_id"] != user_id and user_role not in ("investigator", "admin"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
     file_path = detection.get("file_path", "")

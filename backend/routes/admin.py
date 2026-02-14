@@ -132,6 +132,17 @@ async def get_stats(current_user: AuthenticatedUser = Depends(require_admin)):
     susp_resp = supabase.table("detections").select("id", count="exact").eq("label", "Suspicious").execute()
     deep_resp = supabase.table("detections").select("id", count="exact").eq("label", "Deepfake").execute()
 
+    # Compute average trust score
+    avg_trust_score = None
+    if total_detections > 0:
+        try:
+            all_scores = supabase.table("detections").select("trust_score").execute()
+            scores = [d["trust_score"] for d in (all_scores.data or []) if d.get("trust_score") is not None]
+            if scores:
+                avg_trust_score = round(sum(scores) / len(scores), 1)
+        except Exception:
+            pass
+
     return {
         "users": {"total": total_users},
         "detections": {
@@ -148,6 +159,7 @@ async def get_stats(current_user: AuthenticatedUser = Depends(require_admin)):
             },
         },
         "reports": {"total": total_reports},
+        "avgTrustScore": avg_trust_score,
     }
 
 
@@ -162,8 +174,29 @@ async def get_activity_logs(
 
     resp = supabase.table("activity_logs").select("*", count="exact").order("created_at", desc=True).range(offset, offset + limit - 1).execute()
 
+    logs = []
+    for log in resp.data or []:
+        # Get user email for display
+        user_email = "System"
+        if log.get("user_id"):
+            try:
+                profile_resp = supabase.table("profiles").select("email").eq("id", log["user_id"]).single().execute()
+                if profile_resp.data:
+                    user_email = profile_resp.data["email"]
+            except Exception:
+                pass
+
+        logs.append({
+            "id": log["id"],
+            "action": log.get("action", ""),
+            "userEmail": user_email,
+            "timestamp": log.get("created_at", ""),
+            "resource": log.get("resource_type", ""),
+            "details": str(log.get("details", "")) if log.get("details") else None,
+        })
+
     return {
-        "logs": resp.data or [],
+        "logs": logs,
         "total": resp.count or 0,
         "limit": limit,
         "offset": offset,

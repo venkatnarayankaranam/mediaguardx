@@ -157,6 +157,17 @@ export const getDetectionResult = async (detectionId: string): Promise<Detection
     heatmapUrl = `${apiBaseUrl}${heatmapUrl.startsWith('/') ? '' : '/'}${heatmapUrl}`;
   }
 
+  // Append session token to file URLs so browser <img>/<video>/<audio> elements can authenticate
+  const { data: { session } } = await supabase.auth.getSession();
+  if (session?.access_token) {
+    const sep = fileUrl?.includes('?') ? '&' : '?';
+    if (fileUrl) fileUrl = `${fileUrl}${sep}token=${session.access_token}`;
+    if (heatmapUrl) {
+      const hSep = heatmapUrl.includes('?') ? '&' : '?';
+      heatmapUrl = `${heatmapUrl}${hSep}token=${session.access_token}`;
+    }
+  }
+
   return {
     id: data.id,
     fileName: data.fileName,
