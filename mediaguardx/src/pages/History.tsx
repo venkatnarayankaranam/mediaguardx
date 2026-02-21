@@ -1,6 +1,20 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { History as HistoryIcon, Search, FileImage, FileVideo, FileAudio, ChevronLeft, ChevronRight, FileQuestion } from 'lucide-react';
+import {
+  History as HistoryIcon,
+  Search,
+  FileImage,
+  FileVideo,
+  FileAudio,
+  ChevronLeft,
+  ChevronRight,
+  ChevronDown,
+  ChevronUp,
+  FileQuestion,
+  ShieldAlert,
+  ShieldCheck,
+  AlertTriangle,
+} from 'lucide-react';
 import { getUserHistory } from '@/services/api';
 import Badge from '@/components/ui/Badge';
 import Skeleton from '@/components/ui/Skeleton';
@@ -50,6 +64,128 @@ function getFileTypeBadgeVariant(fileType: string): 'info' | 'success' | 'warnin
   return 'neutral';
 }
 
+interface SectionConfig {
+  key: string;
+  title: string;
+  icon: React.ReactNode;
+  statuses: string[];
+  borderColor: string;
+  headerBg: string;
+  countBg: string;
+  countText: string;
+}
+
+const SECTIONS: SectionConfig[] = [
+  {
+    key: 'deepfake',
+    title: 'Deepfake Detected',
+    icon: <ShieldAlert className="w-5 h-5 text-red-400" />,
+    statuses: ['deepfake'],
+    borderColor: 'border-red-500/30',
+    headerBg: 'bg-red-500/5',
+    countBg: 'bg-red-500/20',
+    countText: 'text-red-300',
+  },
+  {
+    key: 'suspicious',
+    title: 'Suspicious',
+    icon: <AlertTriangle className="w-5 h-5 text-amber-400" />,
+    statuses: ['suspected'],
+    borderColor: 'border-amber-500/30',
+    headerBg: 'bg-amber-500/5',
+    countBg: 'bg-amber-500/20',
+    countText: 'text-amber-300',
+  },
+  {
+    key: 'authentic',
+    title: 'Authentic',
+    icon: <ShieldCheck className="w-5 h-5 text-emerald-400" />,
+    statuses: ['authentic'],
+    borderColor: 'border-emerald-500/30',
+    headerBg: 'bg-emerald-500/5',
+    countBg: 'bg-emerald-500/20',
+    countText: 'text-emerald-300',
+  },
+];
+
+function DetectionTable({
+  items,
+  navigate,
+}: {
+  items: HistoryItem[];
+  navigate: (path: string) => void;
+}) {
+  if (items.length === 0) return null;
+
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full">
+        <thead>
+          <tr className="border-b border-slate-800">
+            <th className="text-left py-3 px-5 text-xs font-semibold text-slate-400 uppercase tracking-wider">
+              File Name
+            </th>
+            <th className="text-left py-3 px-5 text-xs font-semibold text-slate-400 uppercase tracking-wider">
+              Type
+            </th>
+            <th className="text-left py-3 px-5 text-xs font-semibold text-slate-400 uppercase tracking-wider">
+              Trust Score
+            </th>
+            <th className="text-left py-3 px-5 text-xs font-semibold text-slate-400 uppercase tracking-wider">
+              Status
+            </th>
+            <th className="text-left py-3 px-5 text-xs font-semibold text-slate-400 uppercase tracking-wider">
+              Date
+            </th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-800/50">
+          {items.map((item) => (
+            <tr
+              key={item.id}
+              onClick={() => navigate(`/detection/${item.id}`)}
+              className="hover:bg-slate-800/40 transition-colors cursor-pointer"
+            >
+              <td className="py-3.5 px-5">
+                <span className="text-sm text-slate-200 font-medium truncate block max-w-[250px]">
+                  {item.fileName}
+                </span>
+              </td>
+              <td className="py-3.5 px-5">
+                <Badge variant={getFileTypeBadgeVariant(item.fileType)}>
+                  <span className="flex items-center gap-1.5">
+                    {getFileTypeIcon(item.fileType)}
+                    {item.fileType}
+                  </span>
+                </Badge>
+              </td>
+              <td className="py-3.5 px-5">
+                <span className={`text-sm font-semibold ${getTrustScoreColor(item.trustScore ?? 0)}`}>
+                  {(item.trustScore ?? 0).toFixed(1)}%
+                </span>
+              </td>
+              <td className="py-3.5 px-5">
+                <Badge variant={getStatusBadgeVariant(item.status)}>
+                  {item.status}
+                </Badge>
+              </td>
+              <td className="py-3.5 px-5">
+                <span className="text-sm text-slate-400">
+                  {new Date(item.createdAt).toLocaleDateString(undefined, {
+                    year: 'numeric',
+                    month: 'short',
+                    day: 'numeric',
+                  })}
+                </span>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export default function History() {
   const navigate = useNavigate();
 
@@ -61,6 +197,12 @@ export default function History() {
   const [mediaTypeFilter, setMediaTypeFilter] = useState('All');
   const [statusFilter, setStatusFilter] = useState('All');
   const [searchQuery, setSearchQuery] = useState('');
+
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+
+  const toggleSection = (key: string) => {
+    setCollapsed((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
 
   const fetchHistory = useCallback(async (currentPage: number) => {
     setLoading(true);
@@ -99,6 +241,9 @@ export default function History() {
   });
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+
+  const getItemsForSection = (section: SectionConfig) =>
+    filteredDetections.filter((item) => section.statuses.includes(item.status));
 
   return (
     <div className="max-w-7xl mx-auto space-y-6">
@@ -149,105 +294,97 @@ export default function History() {
         </div>
       </div>
 
-      {/* Table */}
-      <div className="card rounded-xl overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead>
-              <tr className="border-b border-slate-800">
-                <th className="text-left py-3.5 px-5 text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                  File Name
-                </th>
-                <th className="text-left py-3.5 px-5 text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                  Type
-                </th>
-                <th className="text-left py-3.5 px-5 text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                  Trust Score
-                </th>
-                <th className="text-left py-3.5 px-5 text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                  Status
-                </th>
-                <th className="text-left py-3.5 px-5 text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                  Date
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-800/50">
-              {loading && (
-                <>
-                  {Array.from({ length: 5 }).map((_, i) => (
-                    <tr key={i}>
-                      <td className="py-4 px-5"><Skeleton className="h-4 w-40" variant="text" /></td>
-                      <td className="py-4 px-5"><Skeleton className="h-5 w-16" variant="rectangular" /></td>
-                      <td className="py-4 px-5"><Skeleton className="h-4 w-12" variant="text" /></td>
-                      <td className="py-4 px-5"><Skeleton className="h-5 w-20" variant="rectangular" /></td>
-                      <td className="py-4 px-5"><Skeleton className="h-4 w-24" variant="text" /></td>
-                    </tr>
-                  ))}
-                </>
-              )}
-
-              {!loading && filteredDetections.length === 0 && (
-                <tr>
-                  <td colSpan={5} className="py-16 text-center">
-                    <FileQuestion className="w-12 h-12 text-slate-600 mx-auto mb-3" />
-                    <p className="text-slate-500 text-lg font-medium">No detections found</p>
-                    <p className="text-slate-600 text-sm mt-1">
-                      {searchQuery || mediaTypeFilter !== 'All' || statusFilter !== 'All'
-                        ? 'Try adjusting your filters'
-                        : 'Upload media from the dashboard to get started'}
-                    </p>
-                  </td>
+      {/* Loading State */}
+      {loading && (
+        <div className="card rounded-xl overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="border-b border-slate-800">
+                  <th className="text-left py-3.5 px-5 text-xs font-semibold text-slate-400 uppercase tracking-wider">File Name</th>
+                  <th className="text-left py-3.5 px-5 text-xs font-semibold text-slate-400 uppercase tracking-wider">Type</th>
+                  <th className="text-left py-3.5 px-5 text-xs font-semibold text-slate-400 uppercase tracking-wider">Trust Score</th>
+                  <th className="text-left py-3.5 px-5 text-xs font-semibold text-slate-400 uppercase tracking-wider">Status</th>
+                  <th className="text-left py-3.5 px-5 text-xs font-semibold text-slate-400 uppercase tracking-wider">Date</th>
                 </tr>
-              )}
-
-              {!loading && filteredDetections.map((item) => (
-                <tr
-                  key={item.id}
-                  onClick={() => navigate(`/detection/${item.id}`)}
-                  className="hover:bg-slate-800/40 transition-colors cursor-pointer"
-                >
-                  <td className="py-3.5 px-5">
-                    <span className="text-sm text-slate-200 font-medium truncate block max-w-[250px]">
-                      {item.fileName}
-                    </span>
-                  </td>
-                  <td className="py-3.5 px-5">
-                    <Badge variant={getFileTypeBadgeVariant(item.fileType)}>
-                      <span className="flex items-center gap-1.5">
-                        {getFileTypeIcon(item.fileType)}
-                        {item.fileType}
-                      </span>
-                    </Badge>
-                  </td>
-                  <td className="py-3.5 px-5">
-                    <span className={`text-sm font-semibold ${getTrustScoreColor(item.trustScore ?? 0)}`}>
-                      {(item.trustScore ?? 0).toFixed(1)}%
-                    </span>
-                  </td>
-                  <td className="py-3.5 px-5">
-                    <Badge variant={getStatusBadgeVariant(item.status)}>
-                      {item.status}
-                    </Badge>
-                  </td>
-                  <td className="py-3.5 px-5">
-                    <span className="text-sm text-slate-400">
-                      {new Date(item.createdAt).toLocaleDateString(undefined, {
-                        year: 'numeric',
-                        month: 'short',
-                        day: 'numeric',
-                      })}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-slate-800/50">
+                {Array.from({ length: 5 }).map((_, i) => (
+                  <tr key={i}>
+                    <td className="py-4 px-5"><Skeleton className="h-4 w-40" variant="text" /></td>
+                    <td className="py-4 px-5"><Skeleton className="h-5 w-16" variant="rectangular" /></td>
+                    <td className="py-4 px-5"><Skeleton className="h-4 w-12" variant="text" /></td>
+                    <td className="py-4 px-5"><Skeleton className="h-5 w-20" variant="rectangular" /></td>
+                    <td className="py-4 px-5"><Skeleton className="h-4 w-24" variant="text" /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
+      )}
 
-        {/* Pagination */}
-        {!loading && total > PAGE_SIZE && (
-          <div className="flex items-center justify-between px-5 py-4 border-t border-slate-800">
+      {/* Empty State */}
+      {!loading && filteredDetections.length === 0 && (
+        <div className="card rounded-xl py-16 text-center">
+          <FileQuestion className="w-12 h-12 text-slate-600 mx-auto mb-3" />
+          <p className="text-slate-500 text-lg font-medium">No detections found</p>
+          <p className="text-slate-600 text-sm mt-1">
+            {searchQuery || mediaTypeFilter !== 'All' || statusFilter !== 'All'
+              ? 'Try adjusting your filters'
+              : 'Upload media from the dashboard to get started'}
+          </p>
+        </div>
+      )}
+
+      {/* Grouped Sections */}
+      {!loading && filteredDetections.length > 0 && (
+        <div className="space-y-4">
+          {SECTIONS.map((section) => {
+            const sectionItems = getItemsForSection(section);
+            if (sectionItems.length === 0) return null;
+            const isCollapsed = collapsed[section.key] ?? false;
+
+            return (
+              <div
+                key={section.key}
+                className={`card rounded-xl overflow-hidden border-l-4 ${section.borderColor}`}
+              >
+                {/* Section Header */}
+                <button
+                  onClick={() => toggleSection(section.key)}
+                  className={`w-full flex items-center justify-between px-5 py-3.5 ${section.headerBg} hover:bg-slate-800/30 transition-colors`}
+                >
+                  <div className="flex items-center gap-3">
+                    {section.icon}
+                    <span className="text-sm font-semibold text-slate-200">
+                      {section.title}
+                    </span>
+                    <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${section.countBg} ${section.countText}`}>
+                      {sectionItems.length}
+                    </span>
+                  </div>
+                  {isCollapsed ? (
+                    <ChevronDown className="w-4 h-4 text-slate-400" />
+                  ) : (
+                    <ChevronUp className="w-4 h-4 text-slate-400" />
+                  )}
+                </button>
+
+                {/* Section Table */}
+                {!isCollapsed && (
+                  <DetectionTable items={sectionItems} navigate={navigate} />
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Pagination */}
+      {!loading && total > PAGE_SIZE && (
+        <div className="card rounded-xl">
+          <div className="flex items-center justify-between px-5 py-4">
             <p className="text-sm text-slate-500">
               Showing {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, total)} of {total} results
             </p>
@@ -273,8 +410,8 @@ export default function History() {
               </button>
             </div>
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }

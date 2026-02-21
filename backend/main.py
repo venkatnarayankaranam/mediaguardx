@@ -11,6 +11,7 @@ from database import connect_db, close_db
 from middleware.error_handler import setup_error_handlers
 from middleware.rate_limiter import setup_rate_limiting
 from routes import auth, detection, history, reports, admin, live
+from services.model_engine import load_model_if_available
 
 # Configure logging
 logging.basicConfig(
@@ -26,6 +27,10 @@ async def lifespan(app: FastAPI):
     logger.info("Starting MediaGuardX backend...")
     await connect_db()
     logger.info("Supabase connected")
+    if load_model_if_available():
+        logger.info("ML model loaded — Grad-CAM heatmaps enabled")
+    else:
+        logger.warning("ML model not loaded — using placeholder heatmaps")
     yield
     logger.info("Shutting down MediaGuardX backend...")
     await close_db()
