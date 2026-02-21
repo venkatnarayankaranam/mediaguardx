@@ -15,7 +15,8 @@ from services.emotion_analyzer import analyze_emotion_mismatch
 from services.sync_analyzer import analyze_sync
 from services.compression_analyzer import analyze_compression
 from services.fingerprint_analyzer import analyze_fingerprint
-from services.model_engine import _generate_heatmap_placeholder, _generate_gradcam, load_model_if_available, _MODEL, ML_AVAILABLE
+from services import model_engine
+from services.model_engine import _generate_heatmap_placeholder, _generate_gradcam
 from config import settings
 from datetime import datetime
 import asyncio
@@ -339,7 +340,7 @@ async def _detect_media(
         # Generate heatmap (Grad-CAM if ML model is available, otherwise placeholder)
         heatmap_url = None
         try:
-            if media_type == "image" and ML_AVAILABLE and _MODEL is not None:
+            if media_type == "image" and model_engine.ML_AVAILABLE and model_engine._MODEL is not None:
                 heatmap_url, xai_regions = _generate_gradcam(file_path, detection_id)
             else:
                 heatmap_url = _generate_heatmap_placeholder(file_path, detection_id)
