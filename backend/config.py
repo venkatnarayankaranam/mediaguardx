@@ -19,8 +19,9 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     node_env: str = "development"
 
-    # CORS
+    # CORS — comma-separated list of allowed origins
     frontend_url: str = "http://localhost:5173"
+    cors_origins: str = ""  # extra origins, comma-separated; frontend_url is always included
 
     # File Upload
     max_file_size_mb: int = 500

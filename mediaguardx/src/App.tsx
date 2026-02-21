@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useAuthStore } from '@/store/authStore';
 
@@ -6,28 +6,37 @@ import { useAuthStore } from '@/store/authStore';
 import ProtectedRoute from '@/guards/ProtectedRoute';
 import AdminRoute from '@/guards/AdminRoute';
 
-// Layouts
+// Layouts (keep eagerly loaded — they wrap every page)
 import AppLayout from '@/components/layouts/AppLayout';
 import AdminLayout from '@/components/layouts/AdminLayout';
 
-// Public pages
+// Public pages (eagerly loaded — initial landing)
 import Landing from '@/pages/Landing';
 import Login from '@/pages/Login';
 import Register from '@/pages/Register';
-import ForgotPassword from '@/pages/ForgotPassword';
-import AdminLogin from '@/pages/AdminLogin';
 
-// Protected pages
-import Dashboard from '@/pages/Dashboard';
-import DetectionResult from '@/pages/DetectionResult';
-import CameraMonitoring from '@/pages/CameraMonitoring';
-import History from '@/pages/History';
+// Lazy-loaded pages (code-split into separate chunks)
+const ForgotPassword = lazy(() => import('@/pages/ForgotPassword'));
+const AdminLogin = lazy(() => import('@/pages/AdminLogin'));
+const Dashboard = lazy(() => import('@/pages/Dashboard'));
+const DetectionResult = lazy(() => import('@/pages/DetectionResult'));
+const CameraMonitoring = lazy(() => import('@/pages/CameraMonitoring'));
+const History = lazy(() => import('@/pages/History'));
+const AdminDashboard = lazy(() => import('@/pages/admin/AdminDashboard'));
+const UserManagement = lazy(() => import('@/pages/admin/UserManagement'));
+const SystemLogs = lazy(() => import('@/pages/admin/SystemLogs'));
+const InvestigatorDashboard = lazy(() => import('@/pages/admin/InvestigatorDashboard'));
 
-// Admin pages
-import AdminDashboard from '@/pages/admin/AdminDashboard';
-import UserManagement from '@/pages/admin/UserManagement';
-import SystemLogs from '@/pages/admin/SystemLogs';
-import InvestigatorDashboard from '@/pages/admin/InvestigatorDashboard';
+function PageLoader() {
+  return (
+    <div className="min-h-[50vh] flex items-center justify-center">
+      <div className="flex flex-col items-center gap-3">
+        <div className="w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+        <p className="text-xs text-slate-500">Loading...</p>
+      </div>
+    </div>
+  );
+}
 
 function App() {
   const { initialize, initialized } = useAuthStore();
@@ -49,61 +58,63 @@ function App() {
 
   return (
     <BrowserRouter>
-      <Routes>
-        {/* Public routes */}
-        <Route path="/" element={<Landing />} />
-        <Route path="/login" element={<Login />} />
-        <Route path="/register" element={<Register />} />
-        <Route path="/forgot-password" element={<ForgotPassword />} />
-        <Route path="/admin/login" element={<AdminLogin />} />
+      <Suspense fallback={<PageLoader />}>
+        <Routes>
+          {/* Public routes */}
+          <Route path="/" element={<Landing />} />
+          <Route path="/login" element={<Login />} />
+          <Route path="/register" element={<Register />} />
+          <Route path="/forgot-password" element={<ForgotPassword />} />
+          <Route path="/admin/login" element={<AdminLogin />} />
 
-        {/* Protected routes */}
-        <Route path="/dashboard" element={
-          <ProtectedRoute>
-            <AppLayout><Dashboard /></AppLayout>
-          </ProtectedRoute>
-        } />
-        <Route path="/detection/:id" element={
-          <ProtectedRoute>
-            <AppLayout><DetectionResult /></AppLayout>
-          </ProtectedRoute>
-        } />
-        <Route path="/camera" element={
-          <ProtectedRoute>
-            <AppLayout><CameraMonitoring /></AppLayout>
-          </ProtectedRoute>
-        } />
-        <Route path="/history" element={
-          <ProtectedRoute>
-            <AppLayout><History /></AppLayout>
-          </ProtectedRoute>
-        } />
+          {/* Protected routes */}
+          <Route path="/dashboard" element={
+            <ProtectedRoute>
+              <AppLayout><Dashboard /></AppLayout>
+            </ProtectedRoute>
+          } />
+          <Route path="/detection/:id" element={
+            <ProtectedRoute>
+              <AppLayout><DetectionResult /></AppLayout>
+            </ProtectedRoute>
+          } />
+          <Route path="/camera" element={
+            <ProtectedRoute>
+              <AppLayout><CameraMonitoring /></AppLayout>
+            </ProtectedRoute>
+          } />
+          <Route path="/history" element={
+            <ProtectedRoute>
+              <AppLayout><History /></AppLayout>
+            </ProtectedRoute>
+          } />
 
-        {/* Admin routes */}
-        <Route path="/admin" element={
-          <AdminRoute>
-            <AdminLayout><AdminDashboard /></AdminLayout>
-          </AdminRoute>
-        } />
-        <Route path="/admin/users" element={
-          <AdminRoute>
-            <AdminLayout><UserManagement /></AdminLayout>
-          </AdminRoute>
-        } />
-        <Route path="/admin/logs" element={
-          <AdminRoute>
-            <AdminLayout><SystemLogs /></AdminLayout>
-          </AdminRoute>
-        } />
-        <Route path="/admin/investigator" element={
-          <AdminRoute>
-            <AdminLayout><InvestigatorDashboard /></AdminLayout>
-          </AdminRoute>
-        } />
+          {/* Admin routes */}
+          <Route path="/admin" element={
+            <AdminRoute>
+              <AdminLayout><AdminDashboard /></AdminLayout>
+            </AdminRoute>
+          } />
+          <Route path="/admin/users" element={
+            <AdminRoute>
+              <AdminLayout><UserManagement /></AdminLayout>
+            </AdminRoute>
+          } />
+          <Route path="/admin/logs" element={
+            <AdminRoute>
+              <AdminLayout><SystemLogs /></AdminLayout>
+            </AdminRoute>
+          } />
+          <Route path="/admin/investigator" element={
+            <AdminRoute>
+              <AdminLayout><InvestigatorDashboard /></AdminLayout>
+            </AdminRoute>
+          } />
 
-        {/* Catch-all */}
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
+          {/* Catch-all */}
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </Suspense>
     </BrowserRouter>
   );
 }

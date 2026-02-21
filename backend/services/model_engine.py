@@ -6,11 +6,10 @@ deterministic placeholder for compatibility and testing.
 import logging
 import os
 from pathlib import Path
-from typing import List, Literal, Optional
+from typing import Optional
 
 import numpy as np
 
-from models.detection import Anomaly
 from config import settings
 
 logger = logging.getLogger(__name__)
@@ -304,109 +303,3 @@ def _generate_heatmap_placeholder(file_path: str, detection_id: str) -> str:
         return f"/heatmaps/heatmap_{detection_id}.png"
 
 
-# ---------------------------------------------------------------------------
-# Label helpers
-# ---------------------------------------------------------------------------
-
-def get_label_from_score(trust_score: float) -> Literal["Authentic", "Suspicious", "Deepfake"]:
-    if trust_score >= 70:
-        return "Authentic"
-    elif trust_score >= 40:
-        return "Suspicious"
-    else:
-        return "Deepfake"
-
-
-def _build_anomalies(trust_score: float, is_model: bool) -> List[Anomaly]:
-    """Build anomaly list based on trust score."""
-    anomalies: List[Anomaly] = []
-    if trust_score < 70:
-        severity = "high" if trust_score < 40 else "medium"
-        if is_model:
-            anomalies.append(Anomaly(
-                type="model_prediction",
-                severity=severity,
-                description="EfficientNet-B0 classifier detected potential manipulation artifacts",
-                confidence=round(100 - trust_score, 2),
-            ))
-            if trust_score < 50:
-                anomalies.append(Anomaly(
-                    type="face_blending",
-                    severity=severity,
-                    description="Possible face blending boundary detected by neural network",
-                    confidence=round(min(100, (100 - trust_score) * 0.8), 2),
-                ))
-        else:
-            anomalies.append(Anomaly(
-                type="general",
-                severity=severity,
-                description="Placeholder analysis — no trained model loaded",
-                confidence=round(100 - trust_score, 2),
-            ))
-    return anomalies
-
-
-# ---------------------------------------------------------------------------
-# Main analysis entry point
-# ---------------------------------------------------------------------------
-
-async def analyze_media(file_path: str, media_type: str, detection_id: str) -> dict:
-    """Analyze media using loaded ML model if available, else use deterministic placeholder.
-
-    Returns dict with: trust_score, label, anomalies, heatmap_url, xai_regions
-    """
-    model_loaded = _MODEL is not None or load_model_if_available()
-
-    if model_loaded and ML_AVAILABLE:
-        try:
-            if media_type == "image":
-                prob_real = _predict_image_prob_real(file_path)
-            elif media_type == "video":
-                prob_real = _predict_video_prob_real(file_path)
-            else:
-                prob_real = 0.5
-
-            trust_score = round(float(prob_real) * 100.0, 2)
-            label = get_label_from_score(trust_score)
-            anomalies = _build_anomalies(trust_score, is_model=True)
-
-            # Generate Grad-CAM heatmap (for images; placeholder for video/audio)
-            if media_type == "image":
-                heatmap_url, xai_regions = _generate_gradcam(file_path, detection_id)
-            else:
-                heatmap_url = _generate_heatmap_placeholder(file_path, detection_id)
-                xai_regions = []
-
-            return {
-                "trust_score": trust_score,
-                "label": label,
-                "anomalies": anomalies,
-                "heatmap_url": heatmap_url,
-                "xai_regions": xai_regions,
-            }
-        except Exception as e:
-            logger.exception("Error during ML inference: %s", e)
-
-    # Fallback deterministic behavior
-    try:
-        import hashlib
-        file_size = os.path.getsize(file_path)
-        with open(file_path, "rb") as f:
-            chunk = f.read(65536)
-            h = hashlib.md5(chunk).hexdigest()
-        base = (int(h[0:8], 16) + (file_size % 1000)) % 101
-        trust_score = float(base)
-    except Exception:
-        trust_score = 50.0
-
-    label = get_label_from_score(trust_score)
-    anomalies = _build_anomalies(trust_score, is_model=False)
-    heatmap_url = _generate_heatmap_placeholder(file_path, detection_id)
-
-    return {
-        "trust_score": trust_score,
-        "label": label,
-        "anomalies": anomalies,
-        "heatmap_url": heatmap_url,
-        "xai_regions": [],
-    }

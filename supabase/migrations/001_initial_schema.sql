@@ -16,17 +16,28 @@ create table if not exists public.profiles (
 );
 alter table public.profiles enable row level security;
 
+-- Helper function to check admin status without self-referencing RLS recursion.
+-- Uses SECURITY DEFINER to bypass RLS when checking the caller's role.
+create or replace function public.is_admin()
+returns boolean as $$
+  select exists (
+    select 1 from public.profiles where id = auth.uid() and role = 'admin'
+  );
+$$ language sql security definer stable;
+
+-- Helper function to check investigator/admin status
+create or replace function public.is_privileged()
+returns boolean as $$
+  select exists (
+    select 1 from public.profiles where id = auth.uid() and role in ('admin', 'investigator')
+  );
+$$ language sql security definer stable;
+
 create policy "Users can view own profile" on profiles for select using (auth.uid() = id);
-create policy "Admins can view all profiles" on profiles for select using (
-  exists (select 1 from profiles where id = auth.uid() and role = 'admin')
-);
+create policy "Admins can view all profiles" on profiles for select using (public.is_admin());
 create policy "Users can update own profile" on profiles for update using (auth.uid() = id);
-create policy "Admins can update any profile" on profiles for update using (
-  exists (select 1 from profiles where id = auth.uid() and role = 'admin')
-);
-create policy "Admins can delete profiles" on profiles for delete using (
-  exists (select 1 from profiles where id = auth.uid() and role = 'admin')
-);
+create policy "Admins can update any profile" on profiles for update using (public.is_admin());
+create policy "Admins can delete profiles" on profiles for delete using (public.is_admin());
 
 -- ============================================
 -- 2. Detections table
@@ -55,9 +66,7 @@ alter table public.detections enable row level security;
 
 create policy "Users see own detections" on detections for select using (auth.uid() = user_id);
 create policy "Users insert own detections" on detections for insert with check (auth.uid() = user_id);
-create policy "Admins and investigators see all detections" on detections for select using (
-  exists (select 1 from profiles where id = auth.uid() and role in ('admin', 'investigator'))
-);
+create policy "Admins and investigators see all detections" on detections for select using (public.is_privileged());
 
 -- ============================================
 -- 3. Reports table
@@ -90,9 +99,7 @@ create table if not exists public.activity_logs (
 );
 alter table public.activity_logs enable row level security;
 
-create policy "Admins see all logs" on activity_logs for select using (
-  exists (select 1 from profiles where id = auth.uid() and role = 'admin')
-);
+create policy "Admins see all logs" on activity_logs for select using (public.is_admin());
 create policy "Anyone can insert logs" on activity_logs for insert with check (true);
 
 -- ============================================

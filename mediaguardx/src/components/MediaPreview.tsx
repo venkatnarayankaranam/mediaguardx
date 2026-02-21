@@ -1,4 +1,5 @@
-import { Image, Video, Music, ExternalLink } from 'lucide-react';
+import { useState } from 'react';
+import { Image, Video, Music, ExternalLink, AlertCircle } from 'lucide-react';
 
 interface MediaPreviewProps {
   url: string;
@@ -14,7 +15,21 @@ function FallbackIcon({ type }: { type: MediaPreviewProps['type'] }) {
   return <Image className={iconClass} />;
 }
 
+function MediaError({ fileName }: { fileName: string }) {
+  return (
+    <div className="flex flex-col items-center justify-center py-8 text-center">
+      <AlertCircle className="w-10 h-10 text-red-400 mb-2" />
+      <p className="text-sm text-slate-400">Failed to load media preview</p>
+      <p className="text-xs text-slate-600 mt-1 truncate max-w-full px-4">{fileName}</p>
+    </div>
+  );
+}
+
 function ImagePreview({ url, fileName }: { url: string; fileName: string }) {
+  const [error, setError] = useState(false);
+
+  if (error) return <MediaError fileName={fileName} />;
+
   return (
     <a
       href={url}
@@ -26,6 +41,7 @@ function ImagePreview({ url, fileName }: { url: string; fileName: string }) {
         src={url}
         alt={fileName}
         className="w-full h-full object-cover rounded-lg"
+        onError={() => setError(true)}
       />
       <div className="absolute inset-0 flex items-center justify-center bg-black/0 group-hover:bg-black/40 transition-colors rounded-lg">
         <ExternalLink className="w-6 h-6 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
@@ -34,12 +50,17 @@ function ImagePreview({ url, fileName }: { url: string; fileName: string }) {
   );
 }
 
-function VideoPreview({ url }: { url: string }) {
+function VideoPreview({ url, fileName }: { url: string; fileName: string }) {
+  const [error, setError] = useState(false);
+
+  if (error) return <MediaError fileName={fileName} />;
+
   return (
     <video
       src={url}
       controls
       className="w-full h-full object-contain rounded-lg"
+      onError={() => setError(true)}
     >
       Your browser does not support the video element.
     </video>
@@ -47,11 +68,15 @@ function VideoPreview({ url }: { url: string }) {
 }
 
 function AudioPreview({ url, fileName }: { url: string; fileName: string }) {
+  const [error, setError] = useState(false);
+
+  if (error) return <MediaError fileName={fileName} />;
+
   return (
     <div className="flex flex-col items-center justify-center gap-4 py-8 w-full">
       <Music className="w-16 h-16 text-indigo-400" />
       <p className="text-sm text-slate-400 truncate max-w-full px-4">{fileName}</p>
-      <audio src={url} controls className="w-full max-w-md">
+      <audio src={url} controls className="w-full max-w-md" onError={() => setError(true)}>
         Your browser does not support the audio element.
       </audio>
     </div>
@@ -74,7 +99,7 @@ export default function MediaPreview({ url, type, fileName }: MediaPreviewProps)
   return (
     <div className="card overflow-hidden aspect-video flex items-center justify-center">
       {type === 'image' && <ImagePreview url={url} fileName={fileName} />}
-      {type === 'video' && <VideoPreview url={url} />}
+      {type === 'video' && <VideoPreview url={url} fileName={fileName} />}
       {type === 'audio' && <AudioPreview url={url} fileName={fileName} />}
     </div>
   );

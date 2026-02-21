@@ -10,6 +10,7 @@ import {
   Mic,
   HardDrive,
   ShieldAlert,
+  Image as ImageIcon,
 } from 'lucide-react';
 import { getDetectionResult, generateReport } from '@/services/api';
 import { useToast } from '@/hooks/useToast';
@@ -161,9 +162,11 @@ function AudioPanel({ detection }: { detection: DetectionResult }) {
 
       {analysis.score !== undefined && (
         <div className="flex items-center justify-between py-2 border-b border-slate-800/60">
-          <span className="text-sm text-slate-400">Confidence Score</span>
+          <span className="text-sm text-slate-400">Clone Likelihood</span>
           <span className="text-sm font-medium text-slate-200">
-            {Math.round(analysis.score * 100)}%
+            {analysis.score > 1
+              ? Math.round(analysis.score)
+              : Math.round(analysis.score * 100)}%
           </span>
         </div>
       )}
@@ -208,13 +211,15 @@ function FingerprintPanel({ detection }: { detection: DetectionResult }) {
           <div className="flex items-center justify-between text-sm mb-1.5">
             <span className="text-slate-400">Match Probability</span>
             <span className="font-medium text-slate-200">
-              {Math.round(fingerprint.probability * 100)}%
+              {fingerprint.probability > 1
+                ? Math.round(fingerprint.probability)
+                : Math.round(fingerprint.probability * 100)}%
             </span>
           </div>
           <div className="h-2 w-full rounded-full bg-slate-800">
             <div
               className="h-2 rounded-full bg-indigo-500 transition-all duration-500"
-              style={{ width: `${Math.round(fingerprint.probability * 100)}%` }}
+              style={{ width: `${Math.min(100, fingerprint.probability > 1 ? fingerprint.probability : fingerprint.probability * 100)}%` }}
             />
           </div>
         </div>
@@ -319,8 +324,33 @@ export default function DetectionResultPage() {
 
     setGeneratingReport(true);
     try {
-      await generateReport(id);
-      toast.success('Report generated successfully.');
+      const report = await generateReport(id);
+      toast.success('Report generated — downloading PDF...');
+
+      // Download the PDF via the authenticated API client (no token in URL)
+      if (report.pdfUrl && report.pdfUrl !== '#') {
+        try {
+          const { default: apiClient } = await import('@/services/api');
+          const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
+          const baseUrl = apiBase.replace('/api', '');
+          const fullUrl = report.pdfUrl.startsWith('http')
+            ? report.pdfUrl
+            : `${baseUrl}${report.pdfUrl}`;
+
+          const pdfResponse = await apiClient.get(fullUrl, { responseType: 'blob' });
+          const blob = new Blob([pdfResponse.data], { type: 'application/pdf' });
+          const blobUrl = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = blobUrl;
+          a.download = `MediaGuardX_Report_${id}.pdf`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(blobUrl);
+        } catch {
+          toast.error('Failed to download PDF.');
+        }
+      }
     } catch {
       toast.error('Failed to generate report.');
     } finally {
@@ -436,6 +466,31 @@ export default function DetectionResultPage() {
           <div className="card flex justify-center py-8">
             <TrustScoreGauge score={detection.trustScore} size={220} />
           </div>
+
+          {/* Heatmap display */}
+          {detection.heatmapUrl && (
+            <div className="card overflow-hidden">
+              <div className="flex items-center gap-2 mb-3">
+                <ImageIcon className="w-5 h-5 text-indigo-400" />
+                <h3 className="text-base font-semibold text-slate-200">
+                  XAI Heatmap Analysis
+                </h3>
+              </div>
+              <div className="relative aspect-video bg-slate-900 rounded-lg border border-slate-800 flex items-center justify-center overflow-hidden">
+                <img
+                  src={detection.heatmapUrl}
+                  alt="Heatmap analysis overlay"
+                  className="w-full h-full object-contain"
+                  onError={(e) => {
+                    (e.target as HTMLImageElement).style.display = 'none';
+                  }}
+                />
+              </div>
+              <p className="mt-2 text-xs text-slate-500">
+                Warm colors indicate regions with higher manipulation probability.
+              </p>
+            </div>
+          )}
         </div>
 
         {/* Right column: Tabbed analysis panels */}

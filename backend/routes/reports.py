@@ -1,12 +1,16 @@
 """Report generation routes using Supabase."""
-from fastapi import APIRouter, HTTPException, status, Depends
+from fastapi import APIRouter, HTTPException, status, Depends, Query
 from fastapi.responses import FileResponse
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from typing import Optional
 from database import get_supabase
 from middleware.auth import get_current_user, AuthenticatedUser
 from services.pdf_generator import generate_pdf_report
 import logging
 import os
 import uuid
+
+security = HTTPBearer(auto_error=False)
 
 logger = logging.getLogger(__name__)
 
@@ -35,16 +39,20 @@ async def generate_report(
     if detection["user_id"] != current_user.id and current_user.role not in ("investigator", "admin"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
-    # Check if report already exists
+    # Check if report already exists and PDF file is still on disk
     existing_resp = supabase.table("reports").select("*").eq("detection_id", detection_id).execute()
     if existing_resp.data:
         existing = existing_resp.data[0]
-        return {
-            "id": existing["id"],
-            "detectionId": detection_id,
-            "pdfUrl": f"/api/report/{existing['id']}/download",
-            "createdAt": existing["created_at"],
-        }
+        if os.path.exists(existing["pdf_path"]):
+            return {
+                "id": existing["id"],
+                "detectionId": detection_id,
+                "pdfUrl": f"/api/report/{existing['id']}/download",
+                "createdAt": existing["created_at"],
+            }
+        # PDF file missing — delete stale record and regenerate
+        logger.warning("PDF file missing for report %s, regenerating", existing["id"])
+        supabase.table("reports").delete().eq("id", existing["id"]).execute()
 
     # Generate report
     report_id = str(uuid.uuid4())
@@ -86,10 +94,42 @@ async def generate_report(
 @router.get("/{report_id}/download")
 async def download_report(
     report_id: str,
-    current_user: AuthenticatedUser = Depends(get_current_user),
+    token: Optional[str] = Query(None),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
 ):
-    """Download PDF report."""
+    """Download PDF report.
+
+    Supports auth via:
+    - Authorization: Bearer header (API calls)
+    - ?token= query param (browser window.open)
+    """
     supabase = get_supabase()
+
+    # Resolve auth token from header or query param
+    auth_token = None
+    if credentials and credentials.credentials:
+        auth_token = credentials.credentials
+    elif token:
+        auth_token = token
+
+    if not auth_token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+
+    # Verify token
+    try:
+        user_response = supabase.auth.get_user(auth_token)
+        if not user_response or not user_response.user:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+        user_id = user_response.user.id
+        try:
+            profile_resp = supabase.table("profiles").select("role").eq("id", user_id).single().execute()
+            user_role = profile_resp.data.get("role", "user") if profile_resp.data else "user"
+        except Exception:
+            user_role = "user"
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication failed")
 
     try:
         resp = supabase.table("reports").select("*").eq("id", report_id).single().execute()
@@ -100,7 +140,7 @@ async def download_report(
     if not report:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found")
 
-    if report["user_id"] != current_user.id and current_user.role not in ("investigator", "admin"):
+    if report["user_id"] != user_id and user_role not in ("investigator", "admin"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
     if not os.path.exists(report["pdf_path"]):

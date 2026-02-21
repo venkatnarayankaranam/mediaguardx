@@ -1,11 +1,56 @@
-.planning/
+# Dependencies
 node_modules/
-backend/.env
-backend/__pycache__/
-backend/**/__pycache__/
+__pycache__/
 *.pyc
+*.pyo
 .venv/
-# Frontend env files (contain Supabase keys)
+venv/
+env/
+
+# Environment files (contain secrets)
+.env
+.env.local
+.env.*.local
+backend/.env
 mediaguardx/.env
 mediaguardx/mediaguardx/.env
-.env
+
+# Build output
+dist/
+build/
+*.egg-info/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Uploads and generated files
+uploads/
+heatmaps/
+reports/
+
+# ML model artifacts (large binary files - track with Git LFS if needed)
+*.pth
+*.pt
+*.onnx
+*.h5
+
+# Logs
+*.log
+npm-debug.log*
+
+# Test
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Planning
+.planning/

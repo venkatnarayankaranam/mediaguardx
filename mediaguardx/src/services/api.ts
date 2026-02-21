@@ -9,6 +9,19 @@ const api = axios.create({
   headers: { 'Content-Type': 'application/json' },
 });
 
+/**
+ * Fetch an authenticated URL as a blob and return an object URL.
+ * This avoids leaking auth tokens in query strings.
+ */
+async function fetchAuthenticatedBlobUrl(url: string): Promise<string> {
+  try {
+    const response = await api.get(url, { responseType: 'blob' });
+    return URL.createObjectURL(response.data);
+  } catch {
+    return url; // fallback to original URL if blob fetch fails
+  }
+}
+
 // Attach Supabase session token to requests (only in live mode)
 api.interceptors.request.use(async (config) => {
   if (!isDemoMode) {
@@ -146,10 +159,12 @@ export const getDetectionResult = async (detectionId: string): Promise<Detection
   const response = await api.get(`/detect/${detectionId}`);
   const data = response.data;
 
-  const apiBaseUrl = API_BASE_URL.replace('/api', '');
-  let fileUrl = data.fileUrl;
-  let heatmapUrl = data.heatmapUrl;
+  // Fetch media files as blobs via the authenticated API (avoids leaking tokens in URLs)
+  let fileUrl = data.fileUrl || '';
+  let heatmapUrl = data.heatmapUrl || '';
 
+  // Convert relative URLs to API-relative paths for blob fetching
+  const apiBaseUrl = API_BASE_URL.replace('/api', '');
   if (fileUrl && !fileUrl.startsWith('http')) {
     fileUrl = `${apiBaseUrl}${fileUrl.startsWith('/') ? '' : '/'}${fileUrl}`;
   }
@@ -157,26 +172,22 @@ export const getDetectionResult = async (detectionId: string): Promise<Detection
     heatmapUrl = `${apiBaseUrl}${heatmapUrl.startsWith('/') ? '' : '/'}${heatmapUrl}`;
   }
 
-  // Append session token to file URLs so browser <img>/<video>/<audio> elements can authenticate
-  const { data: { session } } = await supabase.auth.getSession();
-  if (session?.access_token) {
-    const sep = fileUrl?.includes('?') ? '&' : '?';
-    if (fileUrl) fileUrl = `${fileUrl}${sep}token=${session.access_token}`;
-    if (heatmapUrl) {
-      const hSep = heatmapUrl.includes('?') ? '&' : '?';
-      heatmapUrl = `${heatmapUrl}${hSep}token=${session.access_token}`;
-    }
-  }
+  // Fetch files through the authenticated axios client as blobs
+  // This creates local object URLs so <img>/<video>/<audio> elements work without token exposure
+  const [blobFileUrl, blobHeatmapUrl] = await Promise.all([
+    fileUrl ? fetchAuthenticatedBlobUrl(fileUrl) : Promise.resolve(''),
+    heatmapUrl ? fetchAuthenticatedBlobUrl(heatmapUrl) : Promise.resolve(''),
+  ]);
 
   return {
     id: data.id,
     fileName: data.fileName,
     fileType: data.fileType,
-    fileUrl,
+    fileUrl: blobFileUrl,
     trustScore: data.trustScore,
     status: data.status,
     anomalies: data.anomalies || [],
-    heatmapUrl,
+    heatmapUrl: blobHeatmapUrl || undefined,
     createdAt: data.createdAt,
     metadata: data.metadata || {},
     audioAnalysis: data.audioAnalysis,

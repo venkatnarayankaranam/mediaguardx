@@ -163,13 +163,13 @@ async def analyze_fingerprint(file_path: str, media_type: str) -> Optional[dict]
         { source: str|None, probability: float }
     """
     if media_type == "audio":
-        return None
+        return {"source": None, "probability": 0.0}
 
     freq_result = _analyze_frequency_domain(file_path)
     face_result = _check_face_boundary(file_path)
 
     if not freq_result and not face_result:
-        return None
+        return {"source": None, "probability": 0.0}
 
     scores = {}
 

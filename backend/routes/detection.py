@@ -15,6 +15,7 @@ from services.emotion_analyzer import analyze_emotion_mismatch
 from services.sync_analyzer import analyze_sync
 from services.compression_analyzer import analyze_compression
 from services.fingerprint_analyzer import analyze_fingerprint
+from services.model_engine import _generate_heatmap_placeholder, _generate_gradcam, load_model_if_available, _MODEL, ML_AVAILABLE
 from config import settings
 from datetime import datetime
 import asyncio
@@ -335,6 +336,17 @@ async def _detect_media(
         label = _get_label(trust_score)
         anomalies = _build_anomalies(sightengine_result, metadata_result, fingerprint_result, compression_result, trust_score)
 
+        # Generate heatmap (Grad-CAM if ML model is available, otherwise placeholder)
+        heatmap_url = None
+        try:
+            if media_type == "image" and ML_AVAILABLE and _MODEL is not None:
+                heatmap_url, xai_regions = _generate_gradcam(file_path, detection_id)
+            else:
+                heatmap_url = _generate_heatmap_placeholder(file_path, detection_id)
+            logger.info("Heatmap generated: %s", heatmap_url)
+        except Exception as e:
+            logger.warning("Heatmap generation failed: %s", e)
+
         # Store in Supabase
         supabase = get_supabase()
         detection_record = {
@@ -354,7 +366,7 @@ async def _detect_media(
             "compression_info": compression_result if isinstance(compression_result, dict) else None,
             "emotion_mismatch": emotion_result if isinstance(emotion_result, dict) else None,
             "sync_analysis": sync_result if isinstance(sync_result, dict) else None,
-            "heatmap_url": None,
+            "heatmap_url": heatmap_url,
         }
 
         supabase.table("detections").insert(detection_record).execute()
@@ -365,6 +377,7 @@ async def _detect_media(
         # Build response
         base_url = str(request.base_url).rstrip("/") if request else "http://localhost:8000"
         file_url = f"{base_url}/api/detect/{detection_id}/file"
+        full_heatmap_url = f"{base_url}{heatmap_url}" if heatmap_url else None
 
         return {
             "status": "success",
@@ -372,7 +385,7 @@ async def _detect_media(
             "trustScore": trust_score,
             "label": label,
             "anomalies": anomalies,
-            "heatmapUrl": None,
+            "heatmapUrl": full_heatmap_url,
             "fileUrl": file_url,
             "reportId": "",
             "detectionId": detection_id,

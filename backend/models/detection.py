@@ -13,6 +13,7 @@ class Anomaly(BaseModel):
         "audio_sync_mismatch",
         "metadata_tampering",
         "model_prediction",
+        "compression",
         "general"
     ]
     severity: Literal["low", "medium", "high"]
