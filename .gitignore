@@ -37,11 +37,13 @@ uploads/
 heatmaps/
 reports/
 
-# ML model artifacts (large binary files - track with Git LFS if needed)
+# ML model artifacts (large binary files)
 *.pth
 *.pt
 *.onnx
 *.h5
+# Exception: track the project's deepfake detection model
+!backend/models/deepfake_detector.pth
 
 # Logs
 *.log
