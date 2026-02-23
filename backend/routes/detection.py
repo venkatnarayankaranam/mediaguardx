@@ -381,7 +381,6 @@ async def _detect_media(
             "emotion_mismatch": emotion_result if isinstance(emotion_result, dict) else None,
             "sync_analysis": sync_result if isinstance(sync_result, dict) else None,
             "heatmap_url": heatmap_url,
-            "xai_regions": xai_regions if xai_regions else [],
         }
 
         supabase.table("detections").insert(detection_record).execute()
