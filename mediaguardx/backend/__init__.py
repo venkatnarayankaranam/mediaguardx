@@ -1,1 +1,0 @@
-"""MediaGuardX backend package."""
