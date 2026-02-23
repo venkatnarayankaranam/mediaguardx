@@ -265,13 +265,14 @@ def _extract_xai_regions(cam, image_size: tuple) -> list:
             continue
 
         mean_activation = float(np.mean(cam[y:y+ch, x:x+cw]))
-        confidence = round(mean_activation * 100, 1)
+        confidence = round(mean_activation, 3)  # 0-1 range
+        pct = round(confidence * 100, 1)
 
         region_name = _describe_region(cx, cy)
         regions.append({
             "region": region_name,
             "confidence": confidence,
-            "description": f"High manipulation probability ({confidence}%) in {region_name.lower()} area"
+            "description": f"High manipulation probability ({pct}%) in {region_name.lower()} area"
         })
 
     return sorted(regions, key=lambda r: r["confidence"], reverse=True)

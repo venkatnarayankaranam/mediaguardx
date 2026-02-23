@@ -28,15 +28,16 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Weights for composite scoring – heuristic analyzers get real influence
+# Weights for composite scoring — ML model is primary when available
 WEIGHTS = {
-    "sightengine": 0.30,
-    "metadata": 0.20,
-    "fingerprint": 0.18,
-    "compression": 0.12,
-    "audio": 0.08,
-    "emotion": 0.06,
-    "sync": 0.06,
+    "ml_model": 0.40,
+    "sightengine": 0.20,
+    "metadata": 0.12,
+    "fingerprint": 0.10,
+    "compression": 0.08,
+    "audio": 0.04,
+    "emotion": 0.03,
+    "sync": 0.03,
 }
 
 
@@ -109,6 +110,7 @@ def _extract_score(result: dict, analyzer_name: str = "", default: float = 85.0)
 
 
 def _compute_composite_score(
+    ml_model_score: float | None,
     sightengine_score: float | None,
     metadata_result: dict,
     fingerprint_result: dict,
@@ -117,21 +119,26 @@ def _compute_composite_score(
     emotion_result: dict,
     sync_result: dict,
 ) -> float:
-    """Compute weighted composite trust score from all analyzers.
+    """Compute weighted composite trust score from ML model + all analyzers.
 
-    Includes multi-flag penalty: when several heuristic analyzers flag issues
-    simultaneously, the composite score drops more aggressively than the
-    weighted average alone would produce.
+    The ML model (EfficientNet-B0) is the primary signal when available.
+    Sightengine is secondary. Heuristic analyzers provide supporting signals.
     """
     scores = {}
     total_weight = 0.0
 
-    # Sightengine
+    # ML model — primary detector (40% weight)
+    if ml_model_score is not None:
+        scores["ml_model"] = ml_model_score
+        total_weight += WEIGHTS["ml_model"]
+        logger.info("ML model trust score: %.1f", ml_model_score)
+
+    # Sightengine — secondary detector
     if sightengine_score is not None:
         scores["sightengine"] = sightengine_score
         total_weight += WEIGHTS["sightengine"]
 
-    # Heuristic analyzers
+    # Heuristic analyzers — supporting signals
     for name, result in [
         ("metadata", metadata_result),
         ("fingerprint", fingerprint_result),
@@ -145,12 +152,11 @@ def _compute_composite_score(
         total_weight += WEIGHTS[name]
 
     if total_weight == 0:
-        return 75.0  # Fallback
+        return 50.0  # Fallback — uncertain
 
     composite = sum(scores.get(k, 0) * WEIGHTS.get(k, 0) for k in scores) / total_weight
 
     # --- Multi-flag penalty ---
-    # Count how many heuristic analyzers scored below the "suspicious" threshold
     suspicious_threshold = 70.0
     suspicious_analyzers = [
         name for name in ("metadata", "fingerprint", "compression", "audio", "emotion", "sync")
@@ -159,30 +165,24 @@ def _compute_composite_score(
     num_suspicious = len(suspicious_analyzers)
 
     if num_suspicious >= 3:
-        composite -= 20
-        logger.info("Multi-flag penalty: 3+ analyzers suspicious (%s), -20 points", suspicious_analyzers)
+        composite -= 15
+        logger.info("Multi-flag penalty: 3+ analyzers suspicious (%s), -15 points", suspicious_analyzers)
     elif num_suspicious >= 2:
-        composite -= 12
-        logger.info("Multi-flag penalty: 2 analyzers suspicious (%s), -12 points", suspicious_analyzers)
-    elif num_suspicious >= 1:
-        composite -= 5
-        logger.info("Multi-flag penalty: 1 analyzer suspicious (%s), -5 points", suspicious_analyzers)
+        composite -= 8
+        logger.info("Multi-flag penalty: 2 analyzers suspicious (%s), -8 points", suspicious_analyzers)
 
-    # --- Sightengine unavailable penalty ---
-    # Without the primary deepfake detector, cap trust to avoid false "authentic" verdicts
-    if sightengine_score is None:
-        max_without_sightengine = 72.0  # Forces at most "Suspicious" label
-        if composite > max_without_sightengine:
-            logger.info("Sightengine unavailable: capping score from %.1f to %.1f", composite, max_without_sightengine)
-            composite = max_without_sightengine
+    # --- No primary detector penalty ---
+    if ml_model_score is None and sightengine_score is None:
+        composite = min(composite, 65.0)
+        logger.info("No primary detector available — capping score at 65")
 
     return round(min(100, max(0, composite)), 2)
 
 
 def _get_label(score: float) -> str:
-    if score >= 80:
+    if score >= 75:
         return "Authentic"
-    elif score >= 50:
+    elif score >= 45:
         return "Suspicious"
     return "Deepfake"
 
@@ -328,8 +328,26 @@ async def _detect_media(
         emotion_result = results[5]
         sync_result = results[6]
 
+        # Run ML model prediction (primary detector)
+        ml_model_score = None
+        if model_engine.ML_AVAILABLE and model_engine._MODEL is not None:
+            try:
+                if media_type == "image":
+                    prob_real = model_engine._predict_image_prob_real(file_path)
+                elif media_type == "video":
+                    prob_real = model_engine._predict_video_prob_real(file_path)
+                else:
+                    prob_real = None
+
+                if prob_real is not None:
+                    ml_model_score = round(prob_real * 100, 2)
+                    logger.info("ML model prediction: %.1f%% real", ml_model_score)
+            except Exception as e:
+                logger.warning("ML model prediction failed: %s", e)
+
         # Compute composite trust score
         trust_score = _compute_composite_score(
+            ml_model_score,
             sightengine_result.get("trust_score"),
             metadata_result,
             fingerprint_result,
@@ -342,11 +360,11 @@ async def _detect_media(
         label = _get_label(trust_score)
         anomalies = _build_anomalies(sightengine_result, metadata_result, fingerprint_result, compression_result, trust_score)
 
-        # Warn if primary detector was unavailable
-        if not sightengine_result.get("api_available"):
+        # Warn if no primary detectors were available
+        if ml_model_score is None and not sightengine_result.get("api_available"):
             anomalies.insert(0, {
                 "type": "warning",
-                "message": "Primary deepfake detection API unavailable — results are based on heuristic analysis only and may be less accurate.",
+                "message": "No primary detectors available — results are based on heuristic analysis only and may be less accurate.",
             })
 
         # Generate heatmap (Grad-CAM if ML model is available, otherwise placeholder)

@@ -54,5 +54,8 @@ npm-debug.log*
 htmlcov/
 .pytest_cache/
 
+# Old dataset (removed — low quality repeated GIFs)
+ffpp_images/
+
 # Planning
 .planning/
