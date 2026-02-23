@@ -489,6 +489,35 @@ export default function DetectionResultPage() {
               <p className="mt-2 text-xs text-slate-500">
                 Warm colors indicate regions with higher manipulation probability.
               </p>
+
+              {/* XAI Region Annotations */}
+              {detection.xaiRegions && detection.xaiRegions.length > 0 && (
+                <div className="mt-4 space-y-2">
+                  <h4 className="text-sm font-medium text-slate-300">Suspicious Regions Detected</h4>
+                  {detection.xaiRegions.map((region: { region: string; confidence: number; description?: string }, idx: number) => (
+                    <div key={idx} className="flex items-start gap-3 p-2.5 bg-slate-800/50 rounded-lg border border-slate-700/50">
+                      <div className={`mt-0.5 w-2 h-2 rounded-full flex-shrink-0 ${
+                        region.confidence >= 0.7 ? 'bg-red-400' : region.confidence >= 0.4 ? 'bg-amber-400' : 'bg-emerald-400'
+                      }`} />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-medium text-slate-200">{region.region}</span>
+                          <span className={`text-xs px-1.5 py-0.5 rounded ${
+                            region.confidence >= 0.7 ? 'bg-red-500/20 text-red-300' :
+                            region.confidence >= 0.4 ? 'bg-amber-500/20 text-amber-300' :
+                            'bg-emerald-500/20 text-emerald-300'
+                          }`}>
+                            {(region.confidence * 100).toFixed(0)}%
+                          </span>
+                        </div>
+                        {region.description && (
+                          <p className="text-xs text-slate-400 mt-0.5">{region.description}</p>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>

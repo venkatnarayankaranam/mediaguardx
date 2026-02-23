@@ -148,6 +148,16 @@ export const uploadMedia = async (file: File): Promise<{ detectionId: string }> 
   return { detectionId: response.data.detectionId };
 };
 
+export const uploadMediaFromUrl = async (url: string): Promise<{ detectionId: string }> => {
+  if (isDemoMode) {
+    await new Promise((r) => setTimeout(r, 2500));
+    return { detectionId: `demo-${Date.now()}` };
+  }
+
+  const response = await api.post('/detect/url', { url });
+  return { detectionId: response.data.detectionId };
+};
+
 export const getDetectionResult = async (detectionId: string): Promise<DetectionResult> => {
   if (isDemoMode) {
     const detections = getDemoDetections();

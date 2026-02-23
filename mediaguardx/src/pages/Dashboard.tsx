@@ -5,13 +5,14 @@ import {
   BarChart3,
   Eye,
   History,
+  Link,
   ScanLine,
   Shield,
   Upload as UploadIcon,
 } from 'lucide-react';
 import FileUploader from '@/components/FileUploader';
 import AnalysisProgress from '@/components/AnalysisProgress';
-import { uploadMedia, getUserHistory } from '@/services/api';
+import { uploadMedia, uploadMediaFromUrl, getUserHistory } from '@/services/api';
 import { useAuthStore } from '@/store/authStore';
 import { useToast } from '@/hooks/useToast';
 import type { DetectionResult } from '@/types';
@@ -139,6 +140,8 @@ export default function Dashboard() {
     return () => clearInterval(interval);
   }, [uploading]);
 
+  const [mediaUrl, setMediaUrl] = useState('');
+
   async function handleUpload(file: File): Promise<void> {
     setUploading(true);
     try {
@@ -146,11 +149,32 @@ export default function Dashboard() {
       setAnalysisStep(4);
       toast.success('Analysis complete! Redirecting to results...');
 
-      // Brief pause so the user sees the "Complete" step
       await new Promise((resolve) => setTimeout(resolve, 600));
       navigate(`/detection/${detectionId}`);
     } catch {
       toast.error('Upload failed. Please try again.');
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function handleUrlUpload(): Promise<void> {
+    const url = mediaUrl.trim();
+    if (!url) {
+      toast.error('Please enter a valid URL');
+      return;
+    }
+    setUploading(true);
+    try {
+      const { detectionId } = await uploadMediaFromUrl(url);
+      setAnalysisStep(4);
+      toast.success('Analysis complete! Redirecting to results...');
+      setMediaUrl('');
+
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      navigate(`/detection/${detectionId}`);
+    } catch {
+      toast.error('Failed to analyze URL. Make sure it points to a valid image, video, or audio file.');
     } finally {
       setUploading(false);
     }
@@ -227,7 +251,33 @@ export default function Dashboard() {
             </p>
           </div>
         ) : (
-          <FileUploader onUpload={handleUpload} isUploading={uploading} />
+          <>
+            <FileUploader onUpload={handleUpload} isUploading={uploading} />
+
+            <div className="mt-4 pt-4 border-t border-slate-800">
+              <div className="flex items-center gap-2 mb-2">
+                <Link className="w-4 h-4 text-slate-400" />
+                <span className="text-sm text-slate-400">Or analyze from URL</span>
+              </div>
+              <div className="flex gap-2">
+                <input
+                  type="url"
+                  placeholder="Paste image or video URL..."
+                  value={mediaUrl}
+                  onChange={(e) => setMediaUrl(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleUrlUpload()}
+                  className="flex-1 px-4 py-2.5 bg-slate-800/50 border border-slate-700 rounded-lg text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-sm"
+                />
+                <button
+                  onClick={handleUrlUpload}
+                  disabled={!mediaUrl.trim()}
+                  className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-colors"
+                >
+                  Analyze
+                </button>
+              </div>
+            </div>
+          </>
         )}
       </div>
 

@@ -159,17 +159,22 @@ def _compute_composite_score(
     num_suspicious = len(suspicious_analyzers)
 
     if num_suspicious >= 3:
-        # 3+ analyzers flagging = strong evidence of manipulation
         composite -= 20
         logger.info("Multi-flag penalty: 3+ analyzers suspicious (%s), -20 points", suspicious_analyzers)
     elif num_suspicious >= 2:
-        # 2 analyzers flagging = moderate concern
         composite -= 12
         logger.info("Multi-flag penalty: 2 analyzers suspicious (%s), -12 points", suspicious_analyzers)
     elif num_suspicious >= 1:
-        # 1 analyzer flagging = slight concern
         composite -= 5
         logger.info("Multi-flag penalty: 1 analyzer suspicious (%s), -5 points", suspicious_analyzers)
+
+    # --- Sightengine unavailable penalty ---
+    # Without the primary deepfake detector, cap trust to avoid false "authentic" verdicts
+    if sightengine_score is None:
+        max_without_sightengine = 72.0  # Forces at most "Suspicious" label
+        if composite > max_without_sightengine:
+            logger.info("Sightengine unavailable: capping score from %.1f to %.1f", composite, max_without_sightengine)
+            composite = max_without_sightengine
 
     return round(min(100, max(0, composite)), 2)
 
@@ -337,6 +342,13 @@ async def _detect_media(
         label = _get_label(trust_score)
         anomalies = _build_anomalies(sightengine_result, metadata_result, fingerprint_result, compression_result, trust_score)
 
+        # Warn if primary detector was unavailable
+        if not sightengine_result.get("api_available"):
+            anomalies.insert(0, {
+                "type": "warning",
+                "message": "Primary deepfake detection API unavailable — results are based on heuristic analysis only and may be less accurate.",
+            })
+
         # Generate heatmap (Grad-CAM if ML model is available, otherwise placeholder)
         heatmap_url = None
         xai_regions = []
@@ -369,6 +381,7 @@ async def _detect_media(
             "emotion_mismatch": emotion_result if isinstance(emotion_result, dict) else None,
             "sync_analysis": sync_result if isinstance(sync_result, dict) else None,
             "heatmap_url": heatmap_url,
+            "xai_regions": xai_regions if xai_regions else [],
         }
 
         supabase.table("detections").insert(detection_record).execute()
@@ -388,6 +401,7 @@ async def _detect_media(
             "label": label,
             "anomalies": anomalies,
             "heatmapUrl": full_heatmap_url,
+            "xaiRegions": xai_regions if xai_regions else [],
             "fileUrl": file_url,
             "reportId": "",
             "detectionId": detection_id,
@@ -456,6 +470,57 @@ async def detect_audio(
     return await _detect_media(file, "audio", current_user, request)
 
 
+@router.post("/url")
+async def detect_from_url(
+    request: Request,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+):
+    """Download media from a URL and run deepfake detection."""
+    import httpx
+    from io import BytesIO
+
+    body = await request.json()
+    url = body.get("url", "").strip()
+    if not url:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="URL is required")
+
+    # Download the file
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=60.0) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Failed to download: HTTP {e.response.status_code}")
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Failed to download URL: {str(e)}")
+
+    content_type = resp.headers.get("content-type", "")
+    content = resp.content
+
+    if not content or len(content) < 1024:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Downloaded file is too small or empty")
+
+    # Determine media type
+    if "image" in content_type or url.lower().endswith((".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp")):
+        media_type = "image"
+    elif "video" in content_type or url.lower().endswith((".mp4", ".avi", ".mov", ".mkv", ".webm")):
+        media_type = "video"
+    elif "audio" in content_type or url.lower().endswith((".mp3", ".wav", ".ogg", ".flac", ".m4a")):
+        media_type = "audio"
+    else:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Could not determine media type from URL. Supported: image, video, audio")
+
+    # Derive filename from URL
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    filename = os.path.basename(parsed.path) or f"download.{media_type}"
+
+    # Create a fake UploadFile-like object
+    file_obj = UploadFile(filename=filename, file=BytesIO(content), headers={"content-type": content_type})
+
+    return await _detect_media(file_obj, media_type, current_user, request)
+
+
 @router.get("/{detection_id}")
 async def get_detection(
     detection_id: str,
@@ -503,6 +568,7 @@ async def get_detection(
         "emotionMismatch": detection.get("emotion_mismatch"),
         "syncAnalysis": detection.get("sync_analysis"),
         "sightengineResult": detection.get("sightengine_result"),
+        "xaiRegions": detection.get("xai_regions", []),
     }
 
     return {k: v for k, v in response.items() if v is not None}

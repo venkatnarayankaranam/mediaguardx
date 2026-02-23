@@ -154,15 +154,11 @@ export default function CameraMonitoring() {
 
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-    canvas.toBlob(
-      (blob) => {
-        if (blob && ws.readyState === WebSocket.OPEN) {
-          ws.send(blob);
-        }
-      },
-      'image/jpeg',
-      0.8,
-    );
+    // Send as base64 data URL — backend expects text, not binary
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(dataUrl);
+    }
   }, []);
 
   const startMonitoring = useCallback(async () => {
