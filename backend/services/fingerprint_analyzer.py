@@ -21,6 +21,13 @@ try:
 except Exception:
     CV2_AVAILABLE = False
 
+try:
+    from PIL import Image as PILImage
+    from PIL.ExifTags import Base as ExifBase
+    PIL_AVAILABLE = True
+except Exception:
+    PIL_AVAILABLE = False
+
 # Known deepfake tool fingerprints based on artifact patterns
 KNOWN_SOURCES = [
     {"name": "FaceSwap", "indicators": ["face_boundary_blur", "color_mismatch"]},
@@ -156,6 +163,57 @@ def _check_face_boundary(file_path: str) -> dict:
         return {}
 
 
+# Exact dimensions commonly produced by GAN architectures
+GAN_DIMENSIONS = {
+    (1024, 1024),  # StyleGAN, StyleGAN2, DALL-E, Midjourney
+    (512, 512),    # StyleGAN2, older GANs
+    (256, 256),    # ProGAN, early GANs
+}
+
+
+def _check_gan_indicators(file_path: str) -> dict:
+    """Check for indicators strongly correlated with GAN-generated images.
+
+    Combines three signals:
+    1. Exact GAN-typical dimensions (1024x1024, 512x512, etc.)
+    2. Missing EXIF/camera metadata
+    3. High JPEG quality (GANs output high-quality images)
+
+    All three together strongly suggest GAN origin.
+    """
+    if not PIL_AVAILABLE:
+        return {}
+
+    try:
+        img = PILImage.open(file_path)
+        w, h = img.size
+        is_gan_size = (w, h) in GAN_DIMENSIONS
+
+        # Check EXIF
+        exif = img.getexif()
+        has_camera = False
+        if exif:
+            has_camera = bool(exif.get(0x010F) or exif.get(0x0110))  # Make, Model
+
+        # Estimate JPEG quality from file size
+        file_size = os.path.getsize(file_path)
+        uncompressed = w * h * 3
+        ratio = file_size / uncompressed if uncompressed > 0 else 0
+        # rough quality estimate: ratio ~0.05 = q30, ~0.15 = q80, ~0.20 = q90
+        estimated_quality = min(100, max(0, ratio * 500))
+
+        return {
+            "is_gan_size": is_gan_size,
+            "has_camera_exif": has_camera,
+            "estimated_quality": estimated_quality,
+            "width": w,
+            "height": h,
+        }
+    except Exception as e:
+        logger.warning("GAN indicator check failed: %s", e)
+        return {}
+
+
 async def analyze_fingerprint(file_path: str, media_type: str) -> Optional[dict]:
     """Identify the likely source/tool of a deepfake.
 
@@ -167,8 +225,9 @@ async def analyze_fingerprint(file_path: str, media_type: str) -> Optional[dict]
 
     freq_result = _analyze_frequency_domain(file_path)
     face_result = _check_face_boundary(file_path)
+    gan_result = _check_gan_indicators(file_path)
 
-    if not freq_result and not face_result:
+    if not freq_result and not face_result and not gan_result:
         return {"source": None, "probability": 0.0}
 
     scores = {}
@@ -178,6 +237,25 @@ async def analyze_fingerprint(file_path: str, media_type: str) -> Optional[dict]
     hf_ratio = freq_result.get("hf_ratio", 0)
     has_boundary_blur = face_result.get("boundary_blur", False)
     has_face = face_result.get("has_face", False)
+
+    # GAN dimension + metadata check (strongest single indicator)
+    is_gan_size = gan_result.get("is_gan_size", False)
+    has_camera = gan_result.get("has_camera_exif", False)
+    est_quality = gan_result.get("estimated_quality", 0)
+
+    if is_gan_size and not has_camera and est_quality > 75:
+        # All three conditions met: GAN dimensions + no EXIF + high quality
+        scores["StyleGAN"] = scores.get("StyleGAN", 0) + 55
+        logger.info(
+            "GAN indicators: %dx%d, no EXIF, quality ~%.0f → StyleGAN +55",
+            gan_result.get("width", 0), gan_result.get("height", 0), est_quality,
+        )
+    elif is_gan_size and not has_camera:
+        # GAN dimensions + no EXIF (quality may be lower due to re-compression)
+        scores["StyleGAN"] = scores.get("StyleGAN", 0) + 30
+    elif is_gan_size:
+        # Only GAN dimensions (camera EXIF present → probably a real crop)
+        scores["StyleGAN"] = scores.get("StyleGAN", 0) + 10
 
     if periodic_peaks > 2:
         scores["StyleGAN"] = scores.get("StyleGAN", 0) + 40

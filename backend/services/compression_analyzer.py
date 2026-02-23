@@ -29,12 +29,13 @@ except Exception:
     PIL_AVAILABLE = False
 
 # Known social media compression signatures (resolution, bitrate ranges)
+# min_width/min_height prevent false positives on standard-sized images
 PLATFORM_SIGNATURES = {
-    "WhatsApp": {"max_width": 1600, "max_height": 1200, "quality_range": (30, 60)},
-    "Instagram": {"max_width": 1080, "max_height": 1350, "quality_range": (40, 75)},
-    "TikTok": {"max_width": 1080, "max_height": 1920, "quality_range": (50, 80)},
-    "Twitter/X": {"max_width": 4096, "max_height": 4096, "quality_range": (60, 85)},
-    "Telegram": {"max_width": 2560, "max_height": 2560, "quality_range": (70, 90)},
+    "WhatsApp": {"min_width": 600, "max_width": 1600, "max_height": 1200, "quality_range": (30, 60)},
+    "Instagram": {"min_width": 600, "max_width": 1080, "max_height": 1350, "quality_range": (40, 75)},
+    "TikTok": {"min_width": 540, "max_width": 1080, "max_height": 1920, "quality_range": (50, 80)},
+    "Twitter/X": {"min_width": 600, "max_width": 4096, "max_height": 4096, "quality_range": (60, 85)},
+    "Telegram": {"min_width": 1280, "max_width": 2560, "max_height": 2560, "quality_range": (70, 90)},
 }
 
 
@@ -145,9 +146,10 @@ async def analyze_compression(file_path: str, media_type: str) -> Optional[dict]
                 evidence.append(f"Image dimensions: {w}x{h}")
                 evidence.append(f"Compression ratio: {comp_ratio:.4f}")
 
-                # Match against platform signatures
+                # Match against platform signatures (check min + max dimensions)
                 for platform, sig in PLATFORM_SIGNATURES.items():
-                    if w <= sig["max_width"] and h <= sig["max_height"]:
+                    min_w = sig.get("min_width", 0)
+                    if min_w <= w <= sig["max_width"] and h <= sig["max_height"]:
                         q_low, q_high = sig["quality_range"]
                         if quality and q_low <= quality <= q_high:
                             detected_platform = platform

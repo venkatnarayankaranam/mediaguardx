@@ -28,16 +28,18 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Weights for composite scoring — ML model is primary when available
+# Weights for composite scoring — Sightengine is primary, ML model is supporting
+# The ML model (EfficientNet-B0) has weak discrimination (~3% gap) so it gets
+# lower weight. Sightengine is the most reliable when available.
 WEIGHTS = {
-    "ml_model": 0.40,
-    "sightengine": 0.20,
+    "sightengine": 0.30,
+    "ml_model": 0.15,
+    "fingerprint": 0.15,
     "metadata": 0.12,
-    "fingerprint": 0.10,
-    "compression": 0.08,
-    "audio": 0.04,
-    "emotion": 0.03,
-    "sync": 0.03,
+    "compression": 0.12,
+    "audio": 0.06,
+    "emotion": 0.05,
+    "sync": 0.05,
 }
 
 
@@ -58,12 +60,13 @@ def _extract_score(result: dict, analyzer_name: str = "", default: float = 85.0)
     if "mismatchScore" in result:
         return 100.0 - float(result["mismatchScore"])
 
-    # Metadata analyzer: compute trust from flags — aggressive penalties
-    # Missing EXIF is a strong indicator of AI-generated/manipulated content
+    # Metadata analyzer: compute trust from flags
+    # Note: missing EXIF is common for ALL web images (Unsplash, social media, etc.)
+    # so the penalty is moderate — it's suggestive but not conclusive
     if "missingCamera" in result:
         score = 100.0
         if result.get("missingCamera"):
-            score -= 55  # no camera info = very suspicious (AI images never have EXIF)
+            score -= 20  # mild penalty (web images routinely lack EXIF)
         if result.get("irregularTimestamps"):
             score -= 30
         if result.get("suspiciousCompression"):
@@ -75,7 +78,7 @@ def _extract_score(result: dict, analyzer_name: str = "", default: float = 85.0)
             bool(result.get("suspiciousCompression")),
         ])
         if flags_set >= 2:
-            score -= 15  # multi-flag penalty
+            score -= 10  # multi-flag penalty
         return max(0, score)
 
     # Fingerprint analyzer: lower trust if deepfake source detected
@@ -119,15 +122,17 @@ def _compute_composite_score(
     emotion_result: dict,
     sync_result: dict,
 ) -> float:
-    """Compute weighted composite trust score from ML model + all analyzers.
+    """Compute weighted composite trust score from all available detectors.
 
-    The ML model (EfficientNet-B0) is the primary signal when available.
-    Sightengine is secondary. Heuristic analyzers provide supporting signals.
+    Sightengine is the primary signal when available (30%).
+    The ML model provides a supporting signal (15%) — it has weak but
+    consistent discrimination (~3% gap between fake and real averages).
+    Heuristic analyzers provide the remaining 55%.
     """
     scores = {}
     total_weight = 0.0
 
-    # ML model — primary detector (40% weight)
+    # ML model — supporting detector (15% weight, weak discrimination)
     if ml_model_score is not None:
         scores["ml_model"] = ml_model_score
         total_weight += WEIGHTS["ml_model"]
@@ -180,9 +185,9 @@ def _compute_composite_score(
 
 
 def _get_label(score: float) -> str:
-    if score >= 75:
+    if score >= 70:
         return "Authentic"
-    elif score >= 45:
+    elif score >= 40:
         return "Suspicious"
     return "Deepfake"
 
