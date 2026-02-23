@@ -30,33 +30,66 @@ async def live_monitor(current_user: AuthenticatedUser = Depends(get_current_use
 async def websocket_frame_analysis(websocket: WebSocket, token: str = Query(None)):
     """WebSocket endpoint for real-time frame analysis.
 
-    Authenticates via ?token= query param (Supabase JWT).
-    Client sends base64-encoded JPEG frames.
+    Authenticates via first message (preferred) or ?token= query param (legacy).
+    Client sends base64-encoded JPEG frames after authentication.
     Server responds with trust score and label for each frame.
     """
-    # Authenticate via token query param
-    if not token:
-        await websocket.close(code=4001, reason="Authentication required. Pass ?token=<jwt>")
+    await websocket.accept()
+
+    # Authenticate: prefer first-message auth, fall back to query param
+    auth_token = token
+    if not auth_token:
+        try:
+            import json as _json
+            first_msg = await websocket.receive_text()
+            try:
+                msg = _json.loads(first_msg)
+                if msg.get("type") == "auth":
+                    auth_token = msg.get("token")
+            except (ValueError, TypeError):
+                pass
+        except Exception:
+            pass
+
+    if not auth_token:
+        await websocket.send_json({"status": "error", "message": "Authentication required"})
+        await websocket.close(code=4001, reason="Authentication required")
         return
 
     supabase = get_supabase()
     try:
-        user_response = supabase.auth.get_user(token)
+        user_response = supabase.auth.get_user(auth_token)
         if not user_response or not user_response.user:
+            await websocket.send_json({"status": "error", "message": "Invalid token"})
             await websocket.close(code=4001, reason="Invalid token")
             return
     except Exception:
+        await websocket.send_json({"status": "error", "message": "Authentication failed"})
         await websocket.close(code=4001, reason="Authentication failed")
         return
-
-    await websocket.accept()
     logger.info("WebSocket connection established for live monitoring")
 
     api_available = bool(settings.sightengine_api_user and settings.sightengine_api_secret)
 
+    import time
+    MIN_FRAME_INTERVAL = 0.2  # 5 FPS max
+    MAX_PAYLOAD_SIZE = 2_000_000  # ~1.5MB base64 = ~1MB image
+    last_frame_time = 0.0
+
     try:
         while True:
             data = await websocket.receive_text()
+
+            # Rate limit: skip frames that arrive too fast
+            now = time.monotonic()
+            if now - last_frame_time < MIN_FRAME_INTERVAL:
+                continue
+            last_frame_time = now
+
+            # Payload size limit
+            if len(data) > MAX_PAYLOAD_SIZE:
+                await websocket.send_json({"status": "error", "message": "Frame too large (max 1.5MB)"})
+                continue
 
             frame_id = f"frame_{uuid.uuid4().hex[:8]}"
             timestamp = datetime.utcnow().isoformat()

@@ -5,7 +5,10 @@ from slowapi.errors import RateLimitExceeded
 from fastapi import FastAPI, Request
 from config import settings
 
-limiter = Limiter(key_func=get_remote_address)
+limiter = Limiter(
+    key_func=get_remote_address,
+    default_limits=[f"{settings.rate_limit_per_minute}/minute"],
+)
 
 
 def setup_rate_limiting(app: FastAPI):

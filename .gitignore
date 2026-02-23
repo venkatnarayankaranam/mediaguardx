@@ -59,6 +59,7 @@ htmlcov/
 
 # Old dataset (removed — low quality repeated GIFs)
 ffpp_images/
+**/ffpp_images/
 
 # Planning
 .planning/

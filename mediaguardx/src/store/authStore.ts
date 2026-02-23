@@ -122,9 +122,20 @@ export const useAuthStore = create<AuthState>()(
             };
             set({ session, user, isAuthenticated: true });
             await get().fetchProfile();
+
+            // Check if user account is deactivated
+            const profile = get().profile;
+            if (profile && profile.is_active === false) {
+              await supabase.auth.signOut();
+              set({ user: null, session: null, profile: null, isAuthenticated: false });
+            }
+          } else {
+            // No valid session: clear any stale persisted auth state
+            set({ user: null, session: null, profile: null, isAuthenticated: false });
           }
         } catch (error) {
           console.error('Auth initialization error:', error);
+          set({ user: null, session: null, profile: null, isAuthenticated: false });
         } finally {
           set({ initialized: true });
         }

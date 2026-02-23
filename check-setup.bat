@@ -8,7 +8,7 @@ echo.
 set ERROR=0
 
 REM Check Python
-echo [1/6] Checking Python...
+echo [1/5] Checking Python...
 python --version >nul 2>&1
 if errorlevel 1 (
     echo ERROR: Python not found!
@@ -19,7 +19,7 @@ if errorlevel 1 (
 
 REM Check Node.js
 echo.
-echo [2/6] Checking Node.js...
+echo [2/5] Checking Node.js...
 node --version >nul 2>&1
 if errorlevel 1 (
     echo ERROR: Node.js not found!
@@ -28,27 +28,9 @@ if errorlevel 1 (
     node --version
 )
 
-REM Check MongoDB Service
-echo.
-echo [3/6] Checking MongoDB Service...
-sc query MongoDB >nul 2>&1
-if errorlevel 1 (
-    echo ERROR: MongoDB service not found!
-    set ERROR=1
-) else (
-    sc query MongoDB | find "RUNNING" >nul
-    if errorlevel 1 (
-        echo WARNING: MongoDB service exists but is NOT running
-        echo Run: net start MongoDB (as Administrator)
-        set ERROR=1
-    ) else (
-        echo MongoDB service is RUNNING
-    )
-)
-
 REM Check Backend Dependencies
 echo.
-echo [4/6] Checking Backend Dependencies...
+echo [3/5] Checking Backend Dependencies...
 if exist "backend\venv\Scripts\activate.bat" (
     echo Virtual environment found
     call backend\venv\Scripts\activate.bat >nul 2>&1
@@ -68,7 +50,7 @@ if exist "backend\venv\Scripts\activate.bat" (
 
 REM Check Frontend Dependencies
 echo.
-echo [5/6] Checking Frontend Dependencies...
+echo [4/5] Checking Frontend Dependencies...
 if exist "mediaguardx\node_modules" (
     echo Frontend dependencies OK
 ) else (
@@ -77,14 +59,21 @@ if exist "mediaguardx\node_modules" (
     set ERROR=1
 )
 
-REM Check .env file
+REM Check .env files
 echo.
-echo [6/6] Checking Configuration...
+echo [5/5] Checking Configuration...
 if exist "backend\.env" (
     echo Backend .env file found
 ) else (
     echo WARNING: Backend .env file not found!
-    echo Create backend\.env with MongoDB connection string
+    echo Create backend\.env from backend\.env.example
+    set ERROR=1
+)
+if exist "mediaguardx\.env" (
+    echo Frontend .env file found
+) else (
+    echo WARNING: Frontend .env file not found!
+    echo Create mediaguardx\.env from mediaguardx\.env.example
     set ERROR=1
 )
 

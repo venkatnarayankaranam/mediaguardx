@@ -51,18 +51,24 @@ async def save_uploaded_file(file: UploadFile, media_type: str, user_id: str) ->
     
     file_path = user_dir / unique_filename
     
-    # Save file
-    contents = await file.read()
-    file_size = len(contents)
-    
-    # Check file size (convert MB to bytes)
+    # Save file using streaming to avoid memory exhaustion
     max_size = settings.max_file_size_mb * 1024 * 1024
-    if file_size > max_size:
-        raise ValueError(f"File size exceeds maximum allowed size of {settings.max_file_size_mb}MB")
-    
+    file_size = 0
+    chunk_size = 8192
+
     with open(file_path, "wb") as f:
-        f.write(contents)
-    
+        while True:
+            chunk = await file.read(chunk_size)
+            if not chunk:
+                break
+            file_size += len(chunk)
+            if file_size > max_size:
+                # Clean up partial file
+                f.close()
+                os.unlink(file_path)
+                raise ValueError(f"File size exceeds maximum allowed size of {settings.max_file_size_mb}MB")
+            f.write(chunk)
+
     return str(file_path), file_size
 
 

@@ -2,7 +2,7 @@ import { Navigate, useLocation } from 'react-router-dom';
 import { useAuthStore } from '@/store/authStore';
 
 export default function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated, initialized } = useAuthStore();
+  const { isAuthenticated, initialized, profile } = useAuthStore();
   const location = useLocation();
 
   if (!initialized) {
@@ -13,7 +13,7 @@ export default function ProtectedRoute({ children }: { children: React.ReactNode
     );
   }
 
-  if (!isAuthenticated) {
+  if (!isAuthenticated || profile?.is_active === false) {
     return <Navigate to="/login" state={{ from: location }} replace />;
   }
 

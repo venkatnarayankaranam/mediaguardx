@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     cors_origins: str = ""  # extra origins, comma-separated; frontend_url is always included
 
     # File Upload
-    max_file_size_mb: int = 500
+    max_file_size_mb: int = 50
     upload_dir: str = "uploads"
     reports_dir: str = "reports"
     heatmaps_dir: str = "heatmaps"

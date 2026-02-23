@@ -62,7 +62,7 @@ def load_model_if_available(model_path: Optional[str] = None):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     try:
-        ckpt = torch.load(path, map_location=device, weights_only=False)
+        ckpt = torch.load(path, map_location=device, weights_only=True)
         arch = ckpt.get("arch", "efficientnet_b0")
         num_classes = ckpt.get("num_classes", 2)
         if arch == "efficientnet_b0":
@@ -413,7 +413,7 @@ def get_feedback_stats() -> dict:
     model_info = {}
     if model_path.exists() and ML_AVAILABLE:
         try:
-            ckpt = torch.load(model_path, map_location="cpu", weights_only=False)
+            ckpt = torch.load(model_path, map_location="cpu", weights_only=True)
             model_info = {
                 "val_accuracy": ckpt.get("val_accuracy"),
                 "epoch": ckpt.get("epoch"),
@@ -487,7 +487,7 @@ def _do_adaptive_retrain(feedback_dir: Path):
         logger.error("No base model found for adaptive retraining")
         return
 
-    ckpt = torch.load(model_path, map_location=device, weights_only=False)
+    ckpt = torch.load(model_path, map_location=device, weights_only=True)
     num_classes = ckpt.get("num_classes", 2)
 
     model = models.efficientnet_b0(weights=None)

@@ -5,27 +5,25 @@ echo   MediaGuardX - Starting All Services
 echo ========================================
 echo.
 
-REM Check if MongoDB is running
-echo [1/3] Checking MongoDB...
-sc query MongoDB | find "RUNNING" >nul
-if errorlevel 1 (
-    echo ERROR: MongoDB is not running!
-    echo Please start MongoDB service first.
-    echo Run: net start MongoDB (as Administrator)
+REM Check if backend .env exists
+echo [1/2] Checking configuration...
+if not exist "backend\.env" (
+    echo ERROR: backend\.env not found!
+    echo Please create backend\.env from backend\.env.example
     pause
     exit /b 1
 )
-echo MongoDB is running OK
+echo Configuration OK
 
 REM Start Backend in new window
 echo.
-echo [2/3] Starting Backend Server...
+echo [1/2] Starting Backend Server...
 start "MediaGuardX Backend" cmd /k "cd backend && python main.py"
 timeout /t 5 /nobreak >nul
 
 REM Start Frontend in new window
 echo.
-echo [3/3] Starting Frontend Server...
+echo [2/2] Starting Frontend Server...
 start "MediaGuardX Frontend" cmd /k "cd mediaguardx && npm run dev"
 
 echo.

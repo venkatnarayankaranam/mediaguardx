@@ -42,18 +42,18 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 async def generic_exception_handler(request: Request, exc: Exception):
     """Handle generic exceptions."""
-    import traceback
     error_msg = str(exc)
-    error_trace = traceback.format_exc()
-    print(f"ERROR: {error_msg}")
-    print(f"TRACEBACK: {error_trace}")
     logger.error(f"Unhandled exception: {error_msg}", exc_info=True)
+
+    # Only expose error details in development mode
+    from config import settings
+    content = {"error": "Internal server error"}
+    if settings.node_env == "development":
+        content["detail"] = error_msg
+
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content={
-            "error": "Internal server error",
-            "detail": error_msg
-        }
+        content=content,
     )
 
 

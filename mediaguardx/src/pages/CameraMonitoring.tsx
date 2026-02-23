@@ -90,10 +90,12 @@ export default function CameraMonitoring() {
 
     const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
     const wsBase = apiBase.replace(/^http/, 'ws');
-    const wsUrl = `${wsBase}/live/ws?token=${session.access_token}`;
+    const wsUrl = `${wsBase}/live/ws`;
     const ws = new WebSocket(wsUrl);
 
     ws.onopen = () => {
+      // Send auth token as first message instead of query param to avoid token leakage in logs
+      ws.send(JSON.stringify({ type: 'auth', token: session.access_token }));
       setIsConnected(true);
       setError(null);
     };

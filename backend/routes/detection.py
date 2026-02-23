@@ -434,7 +434,7 @@ async def _detect_media(
         logger.error(f"Error in detection: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error: {str(e)}",
+            detail="An internal error occurred during analysis",
         )
 
 
@@ -497,17 +497,48 @@ async def detect_from_url(
 ):
     """Download media from a URL and run deepfake detection."""
     import httpx
+    import ipaddress
+    import socket
     from io import BytesIO
+    from urllib.parse import urlparse
 
     body = await request.json()
     url = body.get("url", "").strip()
     if not url:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="URL is required")
 
+    # SSRF protection: validate URL scheme and reject private/internal IPs
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https"):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only HTTP and HTTPS URLs are supported")
+        if not parsed.hostname:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid URL: no hostname")
+        resolved_ip = ipaddress.ip_address(socket.gethostbyname(parsed.hostname))
+        if resolved_ip.is_private or resolved_ip.is_loopback or resolved_ip.is_link_local or resolved_ip.is_reserved:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Internal or private network URLs are not allowed")
+    except (socket.gaierror, ValueError) as e:
+        if isinstance(e, socket.gaierror):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Could not resolve hostname")
+        raise
+
     # Download the file
     try:
-        async with httpx.AsyncClient(follow_redirects=True, timeout=60.0) as client:
+        async with httpx.AsyncClient(follow_redirects=False, timeout=30.0) as client:
             resp = await client.get(url)
+            # Handle redirects manually to prevent SSRF via redirect to internal IP
+            redirect_count = 0
+            while resp.is_redirect and redirect_count < 5:
+                redirect_url = str(resp.next_request.url) if resp.next_request else None
+                if not redirect_url:
+                    break
+                rp = urlparse(redirect_url)
+                if rp.hostname:
+                    rip = ipaddress.ip_address(socket.gethostbyname(rp.hostname))
+                    if rip.is_private or rip.is_loopback or rip.is_link_local or rip.is_reserved:
+                        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Redirect to internal network is not allowed")
+                resp = await client.get(redirect_url)
+                redirect_count += 1
             resp.raise_for_status()
     except httpx.HTTPStatusError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Failed to download: HTTP {e.response.status_code}")
@@ -690,9 +721,20 @@ async def submit_detection_feedback(
     if not detection:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Detection not found")
 
+    # Authorization: only owner, investigator, or admin can submit feedback
+    if detection["user_id"] != current_user.id and current_user.role not in ("investigator", "admin"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
     file_path = detection.get("file_path", "")
     if not file_path or not os.path.exists(file_path):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Detection file not found on disk")
+
+    # Validate file path is within the upload directory
+    from pathlib import Path as _Path
+    real_path = _Path(file_path).resolve()
+    allowed_root = _Path(settings.upload_dir).resolve()
+    if not str(real_path).startswith(str(allowed_root)):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
     result = submit_feedback(file_path, true_label, detection_id)
 
