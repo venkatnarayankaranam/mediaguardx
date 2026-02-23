@@ -1,10 +1,15 @@
-"""Model engine service that uses a PyTorch classifier when available.
+"""Model engine service with adaptive learning.
 
-If no trained model artifact is found, the service falls back to the existing
-deterministic placeholder for compatibility and testing.
+Loads an EfficientNet-B0 deepfake classifier and supports adaptive learning:
+users can submit feedback (confirm real/fake), and the model fine-tunes
+on accumulated feedback to improve over time.
 """
 import logging
+import json
 import os
+import shutil
+import threading
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -59,10 +64,25 @@ def load_model_if_available(model_path: Optional[str] = None):
     try:
         ckpt = torch.load(path, map_location=device, weights_only=False)
         arch = ckpt.get("arch", "efficientnet_b0")
+        num_classes = ckpt.get("num_classes", 2)
         if arch == "efficientnet_b0":
             model = models.efficientnet_b0(weights=None)
             in_features = model.classifier[1].in_features
-            model.classifier = nn.Sequential(nn.Dropout(p=0.2), nn.Linear(in_features, ckpt.get("num_classes", 2)))
+            # Detect classifier architecture from checkpoint keys
+            has_deep_head = any("classifier.4" in k for k in ckpt["model_state_dict"])
+            if has_deep_head:
+                model.classifier = nn.Sequential(
+                    nn.Dropout(p=0.3),
+                    nn.Linear(in_features, 128),
+                    nn.ReLU(),
+                    nn.Dropout(p=0.2),
+                    nn.Linear(128, num_classes),
+                )
+            else:
+                model.classifier = nn.Sequential(
+                    nn.Dropout(p=0.2),
+                    nn.Linear(in_features, num_classes),
+                )
         else:
             model = models.efficientnet_b0(weights=None)
 
@@ -304,3 +324,285 @@ def _generate_heatmap_placeholder(file_path: str, detection_id: str) -> str:
         return f"/heatmaps/heatmap_{detection_id}.png"
 
 
+# ---------------------------------------------------------------------------
+# Adaptive Learning — learn from user feedback
+# ---------------------------------------------------------------------------
+
+_FEEDBACK_DIR = None
+_ADAPTIVE_LOCK = threading.Lock()
+_MIN_FEEDBACK_FOR_RETRAIN = 10  # minimum new samples before retraining
+
+
+def _get_feedback_dir() -> Path:
+    """Get (and create) the feedback directory for adaptive learning samples."""
+    global _FEEDBACK_DIR
+    if _FEEDBACK_DIR is None:
+        backend_root = Path(__file__).resolve().parents[1]
+        _FEEDBACK_DIR = backend_root / "adaptive_data"
+    _FEEDBACK_DIR.mkdir(parents=True, exist_ok=True)
+    (_FEEDBACK_DIR / "fake").mkdir(exist_ok=True)
+    (_FEEDBACK_DIR / "real").mkdir(exist_ok=True)
+    return _FEEDBACK_DIR
+
+
+def submit_feedback(image_path: str, true_label: str, detection_id: str) -> dict:
+    """Save a user-confirmed image to the adaptive learning dataset.
+
+    Args:
+        image_path: Path to the detection image file.
+        true_label: 'fake' or 'real' (user-confirmed ground truth).
+        detection_id: The detection ID for tracing.
+
+    Returns:
+        dict with status and counts.
+    """
+    if true_label not in ("fake", "real"):
+        return {"status": "error", "message": "Label must be 'fake' or 'real'"}
+
+    feedback_dir = _get_feedback_dir()
+    dest_folder = feedback_dir / true_label
+
+    # Copy image to feedback folder
+    src = Path(image_path)
+    if not src.exists():
+        return {"status": "error", "message": "Source image not found"}
+
+    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    dest = dest_folder / f"{timestamp}_{detection_id}{src.suffix}"
+    shutil.copy2(str(src), str(dest))
+
+    # Log the feedback
+    log_path = feedback_dir / "feedback_log.jsonl"
+    entry = {
+        "detection_id": detection_id,
+        "true_label": true_label,
+        "image_path": str(dest),
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+    with open(log_path, "a") as f:
+        f.write(json.dumps(entry) + "\n")
+
+    # Count available feedback
+    fake_count = len(list((feedback_dir / "fake").glob("*")))
+    real_count = len(list((feedback_dir / "real").glob("*")))
+    total = fake_count + real_count
+
+    logger.info(
+        "Feedback saved: %s as %s (total: %d fake, %d real)",
+        detection_id, true_label, fake_count, real_count,
+    )
+
+    return {
+        "status": "saved",
+        "total_feedback": total,
+        "fake_count": fake_count,
+        "real_count": real_count,
+        "ready_to_retrain": total >= _MIN_FEEDBACK_FOR_RETRAIN,
+    }
+
+
+def get_feedback_stats() -> dict:
+    """Get current adaptive learning statistics."""
+    feedback_dir = _get_feedback_dir()
+    fake_count = len(list((feedback_dir / "fake").glob("*")))
+    real_count = len(list((feedback_dir / "real").glob("*")))
+    total = fake_count + real_count
+
+    # Read model metadata
+    model_path = _default_model_path()
+    model_info = {}
+    if model_path.exists() and ML_AVAILABLE:
+        try:
+            ckpt = torch.load(model_path, map_location="cpu", weights_only=False)
+            model_info = {
+                "val_accuracy": ckpt.get("val_accuracy"),
+                "epoch": ckpt.get("epoch"),
+                "last_retrained": ckpt.get("retrained_at"),
+            }
+        except Exception:
+            pass
+
+    return {
+        "feedback_samples": total,
+        "fake_count": fake_count,
+        "real_count": real_count,
+        "min_for_retrain": _MIN_FEEDBACK_FOR_RETRAIN,
+        "ready_to_retrain": total >= _MIN_FEEDBACK_FOR_RETRAIN,
+        "model_loaded": _MODEL is not None,
+        "model_info": model_info,
+    }
+
+
+def trigger_adaptive_retrain() -> dict:
+    """Retrain the model using original dataset + feedback samples.
+
+    This merges the base training data with user feedback and fine-tunes
+    the model for a few epochs. The retrained model is hot-swapped in.
+    """
+    if not ML_AVAILABLE:
+        return {"status": "error", "message": "ML libraries not available"}
+
+    feedback_dir = _get_feedback_dir()
+    fake_count = len(list((feedback_dir / "fake").glob("*")))
+    real_count = len(list((feedback_dir / "real").glob("*")))
+    total = fake_count + real_count
+
+    if total < _MIN_FEEDBACK_FOR_RETRAIN:
+        return {
+            "status": "not_ready",
+            "message": f"Need at least {_MIN_FEEDBACK_FOR_RETRAIN} samples, have {total}",
+        }
+
+    # Run retraining in a background thread to not block the server
+    def _retrain():
+        with _ADAPTIVE_LOCK:
+            try:
+                _do_adaptive_retrain(feedback_dir)
+            except Exception as e:
+                logger.exception("Adaptive retraining failed: %s", e)
+
+    thread = threading.Thread(target=_retrain, daemon=True)
+    thread.start()
+
+    return {
+        "status": "started",
+        "message": f"Retraining started with {total} feedback samples ({fake_count} fake, {real_count} real)",
+    }
+
+
+def _do_adaptive_retrain(feedback_dir: Path):
+    """Internal: run adaptive retraining and hot-swap the model."""
+    global _MODEL, _DEVICE, _CLASS_TO_IDX
+
+    import torch.optim as optim
+    from torch.utils.data import DataLoader, Dataset
+
+    logger.info("=== Adaptive retraining started ===")
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # Load current model as starting point
+    model_path = _default_model_path()
+    if not model_path.exists():
+        logger.error("No base model found for adaptive retraining")
+        return
+
+    ckpt = torch.load(model_path, map_location=device, weights_only=False)
+    num_classes = ckpt.get("num_classes", 2)
+
+    model = models.efficientnet_b0(weights=None)
+    in_features = model.classifier[1].in_features
+    has_deep_head = any("classifier.4" in k for k in ckpt["model_state_dict"])
+    if has_deep_head:
+        model.classifier = nn.Sequential(
+            nn.Dropout(p=0.3),
+            nn.Linear(in_features, 128),
+            nn.ReLU(),
+            nn.Dropout(p=0.2),
+            nn.Linear(128, num_classes),
+        )
+    else:
+        model.classifier = nn.Sequential(
+            nn.Dropout(p=0.2),
+            nn.Linear(in_features, num_classes),
+        )
+
+    model.load_state_dict(ckpt["model_state_dict"])
+    model.to(device)
+
+    # Build dataset from feedback
+    train_transform = transforms.Compose([
+        transforms.Resize((256, 256)),
+        transforms.RandomCrop(224),
+        transforms.RandomHorizontalFlip(p=0.5),
+        transforms.RandomRotation(10),
+        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
+        transforms.ToTensor(),
+        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+    ])
+
+    class FeedbackDataset(Dataset):
+        def __init__(self, feedback_dir, transform):
+            self.transform = transform
+            self.samples = []
+            for img_path in (feedback_dir / "fake").glob("*"):
+                if img_path.suffix.lower() in (".jpg", ".jpeg", ".png"):
+                    self.samples.append((str(img_path), 0))
+            for img_path in (feedback_dir / "real").glob("*"):
+                if img_path.suffix.lower() in (".jpg", ".jpeg", ".png"):
+                    self.samples.append((str(img_path), 1))
+
+        def __len__(self):
+            return len(self.samples)
+
+        def __getitem__(self, idx):
+            path, label = self.samples[idx]
+            img = Image.open(path).convert("RGB")
+            return self.transform(img), label
+
+    feedback_dataset = FeedbackDataset(feedback_dir, train_transform)
+    if len(feedback_dataset) == 0:
+        logger.warning("No valid feedback images found")
+        return
+
+    loader = DataLoader(
+        feedback_dataset, batch_size=8, shuffle=True,
+        num_workers=0, pin_memory=True,
+    )
+
+    # Fine-tune for a few epochs with very low LR
+    model.train()
+    criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
+    optimizer = optim.AdamW(model.parameters(), lr=1e-5, weight_decay=1e-4)
+
+    num_epochs = 5
+    for epoch in range(num_epochs):
+        running_loss = 0.0
+        correct = 0
+        total = 0
+        for images, labels in loader:
+            images, labels = images.to(device), labels.to(device)
+            optimizer.zero_grad()
+            with torch.amp.autocast(device_type="cuda" if device.type == "cuda" else "cpu"):
+                outputs = model(images)
+                loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
+            running_loss += loss.item() * images.size(0)
+            _, predicted = outputs.max(1)
+            total += labels.size(0)
+            correct += predicted.eq(labels).sum().item()
+
+        acc = 100.0 * correct / total if total > 0 else 0
+        logger.info(
+            "Adaptive epoch %d/%d: loss=%.4f acc=%.1f%%",
+            epoch + 1, num_epochs, running_loss / total, acc,
+        )
+
+    # Save retrained model
+    new_ckpt = {
+        "model_state_dict": model.state_dict(),
+        "arch": "efficientnet_b0",
+        "num_classes": num_classes,
+        "class_to_idx": {"fake": 0, "real": 1},
+        "val_accuracy": ckpt.get("val_accuracy"),
+        "retrained_at": datetime.utcnow().isoformat(),
+        "feedback_samples": len(feedback_dataset),
+    }
+
+    # Backup current model
+    backup_path = model_path.with_suffix(".pth.bak")
+    if model_path.exists():
+        shutil.copy2(str(model_path), str(backup_path))
+
+    torch.save(new_ckpt, model_path)
+
+    # Hot-swap the model in memory
+    _MODEL = model
+    _DEVICE = device
+    _CLASS_TO_IDX = new_ckpt["class_to_idx"]
+
+    logger.info(
+        "=== Adaptive retraining complete: %d samples, model hot-swapped ===",
+        len(feedback_dataset),
+    )

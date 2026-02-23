@@ -36,6 +36,8 @@ desktop.ini
 uploads/
 heatmaps/
 reports/
+adaptive_data/
+backend/adaptive_data/
 
 # ML model artifacts (large binary files)
 *.pth
@@ -44,6 +46,7 @@ reports/
 *.h5
 # Exception: track the project's deepfake detection model
 !backend/models/deepfake_detector.pth
+*.pth.bak
 
 # Logs
 *.log
