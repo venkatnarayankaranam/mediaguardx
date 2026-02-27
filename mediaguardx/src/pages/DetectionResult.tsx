@@ -467,57 +467,107 @@ export default function DetectionResultPage() {
             <TrustScoreGauge score={detection.trustScore} size={220} />
           </div>
 
-          {/* Heatmap display */}
+          {/* Heatmap display with side-by-side annotations + color legend */}
           {detection.heatmapUrl && (
             <div className="card overflow-hidden">
-              <div className="flex items-center gap-2 mb-3">
+              <div className="flex items-center gap-2 mb-4">
                 <ImageIcon className="w-5 h-5 text-indigo-400" />
                 <h3 className="text-base font-semibold text-slate-200">
                   XAI Heatmap Analysis
                 </h3>
               </div>
-              <div className="relative aspect-video bg-slate-900 rounded-lg border border-slate-800 flex items-center justify-center overflow-hidden">
-                <img
-                  src={detection.heatmapUrl}
-                  alt="Heatmap analysis overlay"
-                  className="w-full h-full object-contain"
-                  onError={(e) => {
-                    (e.target as HTMLImageElement).style.display = 'none';
-                  }}
-                />
-              </div>
-              <p className="mt-2 text-xs text-slate-500">
-                Warm colors indicate regions with higher manipulation probability.
-              </p>
 
-              {/* XAI Region Annotations */}
-              {detection.xaiRegions && detection.xaiRegions.length > 0 && (
-                <div className="mt-4 space-y-2">
-                  <h4 className="text-sm font-medium text-slate-300">Suspicious Regions Detected</h4>
-                  {detection.xaiRegions.map((region: { region: string; confidence: number; description?: string }, idx: number) => (
-                    <div key={idx} className="flex items-start gap-3 p-2.5 bg-slate-800/50 rounded-lg border border-slate-700/50">
-                      <div className={`mt-0.5 w-2 h-2 rounded-full flex-shrink-0 ${
-                        region.confidence >= 0.7 ? 'bg-red-400' : region.confidence >= 0.4 ? 'bg-amber-400' : 'bg-emerald-400'
-                      }`} />
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-medium text-slate-200">{region.region}</span>
-                          <span className={`text-xs px-1.5 py-0.5 rounded ${
-                            region.confidence >= 0.7 ? 'bg-red-500/20 text-red-300' :
-                            region.confidence >= 0.4 ? 'bg-amber-500/20 text-amber-300' :
-                            'bg-emerald-500/20 text-emerald-300'
-                          }`}>
-                            {(region.confidence * 100).toFixed(0)}%
-                          </span>
-                        </div>
-                        {region.description && (
-                          <p className="text-xs text-slate-400 mt-0.5">{region.description}</p>
-                        )}
-                      </div>
-                    </div>
-                  ))}
+              {/* Side-by-side: Heatmap Image + Region Annotations */}
+              <div className={`grid gap-4 ${detection.xaiRegions && detection.xaiRegions.length > 0 ? 'grid-cols-1 md:grid-cols-[1fr_280px]' : 'grid-cols-1'}`}>
+                {/* Left: Heatmap Image */}
+                <div className="relative bg-slate-900 rounded-lg border border-slate-800 flex items-center justify-center overflow-hidden min-h-[200px]">
+                  <img
+                    src={detection.heatmapUrl}
+                    alt="Heatmap analysis overlay"
+                    className="w-full h-full object-contain"
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).style.display = 'none';
+                    }}
+                  />
                 </div>
-              )}
+
+                {/* Right: Region Annotations (why each area is highlighted) */}
+                {detection.xaiRegions && detection.xaiRegions.length > 0 && (
+                  <div className="space-y-2 overflow-y-auto max-h-[360px]">
+                    <h4 className="text-sm font-semibold text-slate-200 flex items-center gap-1.5">
+                      <AlertTriangle className="w-4 h-4 text-amber-400" />
+                      Flagged Regions
+                    </h4>
+                    {detection.xaiRegions.map((region: { region: string; confidence: number; description?: string; reason?: string }, idx: number) => {
+                      const severity = region.confidence >= 0.7 ? 'high' : region.confidence >= 0.4 ? 'medium' : 'low';
+                      const severityColors = {
+                        high: { dot: 'bg-red-400', badge: 'bg-red-500/20 text-red-300 border-red-500/30', border: 'border-red-500/30' },
+                        medium: { dot: 'bg-amber-400', badge: 'bg-amber-500/20 text-amber-300 border-amber-500/30', border: 'border-amber-500/30' },
+                        low: { dot: 'bg-emerald-400', badge: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30', border: 'border-emerald-500/30' },
+                      };
+                      const colors = severityColors[severity];
+
+                      return (
+                        <div key={idx} className={`p-3 bg-slate-800/60 rounded-lg border ${colors.border}`}>
+                          {/* Region header: name + confidence */}
+                          <div className="flex items-center justify-between mb-1.5">
+                            <div className="flex items-center gap-2">
+                              <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${colors.dot}`} />
+                              <span className="text-sm font-semibold text-slate-100">{region.region}</span>
+                            </div>
+                            <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${colors.badge}`}>
+                              {(region.confidence * 100).toFixed(0)}%
+                            </span>
+                          </div>
+                          {/* Reason: WHY this area is flagged */}
+                          <p className="text-xs text-slate-300 leading-relaxed pl-[18px]">
+                            {region.reason || region.description || 'Statistical anomaly detected by neural network analysis'}
+                          </p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* Color Legend — explains what heatmap colors mean */}
+              <div className="mt-4 p-3 bg-slate-800/40 rounded-lg border border-slate-700/50">
+                <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2.5">
+                  Heatmap Color Guide
+                </h4>
+                <div className="flex flex-wrap gap-x-6 gap-y-2">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-3 rounded-sm" style={{ background: 'linear-gradient(90deg, #d00000, #ff3333)' }} />
+                    <span className="text-xs text-slate-300">
+                      <span className="font-medium text-red-300">Red</span> — High manipulation probability
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-3 rounded-sm" style={{ background: 'linear-gradient(90deg, #ff8800, #ffcc00)' }} />
+                    <span className="text-xs text-slate-300">
+                      <span className="font-medium text-amber-300">Yellow/Orange</span> — Moderate suspicion
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-3 rounded-sm" style={{ background: 'linear-gradient(90deg, #00cc66, #33ff99)' }} />
+                    <span className="text-xs text-slate-300">
+                      <span className="font-medium text-emerald-300">Green</span> — Low suspicion
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-3 rounded-sm" style={{ background: 'linear-gradient(90deg, #0044cc, #3366ff)' }} />
+                    <span className="text-xs text-slate-300">
+                      <span className="font-medium text-blue-300">Blue</span> — Likely authentic region
+                    </span>
+                  </div>
+                </div>
+                <p className="text-[11px] text-slate-500 mt-2">
+                  The heatmap is generated using Grad-CAM (Gradient-weighted Class Activation Mapping).
+                  It visualizes which regions of the image the EfficientNet-B0 model focused on when assessing
+                  manipulation probability. Brighter/warmer colors indicate areas where the model detected stronger
+                  evidence of potential manipulation or AI generation.
+                </p>
+              </div>
             </div>
           )}
         </div>

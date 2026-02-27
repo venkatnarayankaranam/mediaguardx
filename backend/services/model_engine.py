@@ -252,8 +252,8 @@ def _generate_gradcam(image_path: str, detection_id: str) -> tuple:
         heatmap_path = Path(settings.heatmaps_dir) / heatmap_filename
         Image.fromarray(overlay).save(heatmap_path, "PNG")
 
-        # Extract XAI regions from cam
-        xai_regions = _extract_xai_regions(cam_resized, original_size)
+        # Extract XAI regions from cam with per-region diagnostic reasons
+        xai_regions = _extract_xai_regions(cam_resized, original_size, image_path)
 
         return f"/heatmaps/{heatmap_filename}", xai_regions
 
@@ -262,20 +262,34 @@ def _generate_gradcam(image_path: str, detection_id: str) -> tuple:
         return _generate_heatmap_placeholder(image_path, detection_id), []
 
 
-def _extract_xai_regions(cam, image_size: tuple) -> list:
-    """Extract high-activation regions from the CAM for xaiRegions field."""
+def _extract_xai_regions(cam, image_size: tuple, image_path: str = None) -> list:
+    """Extract high-activation regions from the CAM with detailed reasons.
+
+    Each region includes a human-readable *reason* explaining why that area
+    was flagged (e.g., texture anomaly, boundary blur, spectral irregularity).
+    """
     regions = []
     threshold = 0.5
     h, w = cam.shape
+
+    # Load original image once for per-region analysis
+    original_img = None
+    original_gray = None
+    if image_path:
+        try:
+            original_img = cv2.imread(image_path)
+            if original_img is not None:
+                original_gray = cv2.cvtColor(original_img, cv2.COLOR_BGR2GRAY)
+        except Exception:
+            pass
 
     # Find contiguous high-activation areas
     binary = (cam > threshold).astype(np.uint8)
 
     contours_result = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    # Handle both OpenCV 3.x (3 return values) and 4.x (2 return values)
     contours = contours_result[0] if len(contours_result) == 2 else contours_result[1]
 
-    for contour in contours[:5]:  # top 5 regions
+    for contour in contours[:5]:
         x, y, cw, ch = cv2.boundingRect(contour)
         cx = (x + cw / 2) / w
         cy = (y + ch / 2) / h
@@ -285,17 +299,123 @@ def _extract_xai_regions(cam, image_size: tuple) -> list:
             continue
 
         mean_activation = float(np.mean(cam[y:y+ch, x:x+cw]))
-        confidence = round(mean_activation, 3)  # 0-1 range
+        confidence = round(mean_activation, 3)
         pct = round(confidence * 100, 1)
 
         region_name = _describe_region(cx, cy)
+        reason = _diagnose_region(
+            original_img, original_gray, image_size,
+            x, y, cw, ch, w, h, cx, cy, mean_activation, area_ratio,
+        )
+
         regions.append({
             "region": region_name,
             "confidence": confidence,
-            "description": f"High manipulation probability ({pct}%) in {region_name.lower()} area"
+            "description": f"{reason} ({pct}% activation)",
+            "reason": reason,
         })
 
     return sorted(regions, key=lambda r: r["confidence"], reverse=True)
+
+
+def _diagnose_region(
+    img, gray, image_size,
+    rx, ry, rw, rh, cam_w, cam_h,
+    cx, cy, activation, area_ratio,
+) -> str:
+    """Analyze a flagged region and return a specific human-readable reason.
+
+    Uses pixel-level analysis (texture smoothness, edge sharpness, color
+    uniformity, face overlap) to explain *why* Grad-CAM highlighted this area.
+    """
+    reasons = []
+
+    if img is not None and gray is not None:
+        img_h, img_w = img.shape[:2]
+        # Map CAM coordinates to image coordinates
+        sx = int(rx / cam_w * img_w)
+        sy = int(ry / cam_h * img_h)
+        sw = max(1, int(rw / cam_w * img_w))
+        sh = max(1, int(rh / cam_h * img_h))
+        sx = min(sx, img_w - 1)
+        sy = min(sy, img_h - 1)
+        sw = min(sw, img_w - sx)
+        sh = min(sh, img_h - sy)
+
+        roi_gray = gray[sy:sy+sh, sx:sx+sw]
+        roi_color = img[sy:sy+sh, sx:sx+sw]
+
+        if roi_gray.size > 0:
+            # 1. Texture smoothness — GAN skin is unnaturally smooth
+            laplacian_var = float(cv2.Laplacian(roi_gray, cv2.CV_64F).var())
+            if laplacian_var < 50:
+                reasons.append("Unnaturally smooth texture detected — typical of AI-generated skin or blending")
+            elif laplacian_var < 150:
+                reasons.append("Reduced texture detail — possible AI smoothing or filter application")
+
+            # 2. Edge discontinuity — face-swap creates sharp edges
+            edges = cv2.Canny(roi_gray, 50, 150)
+            edge_density = float(np.sum(edges > 0)) / edges.size if edges.size > 0 else 0
+            if edge_density > 0.25:
+                reasons.append("Abnormal edge density — possible blending boundary or splicing artifact")
+            elif edge_density < 0.02 and laplacian_var < 100:
+                reasons.append("Featureless region with no natural edges — potential AI fill or inpainting")
+
+            # 3. Color uniformity — real skin has micro-color variation
+            if roi_color.size > 0 and roi_color.shape[0] > 2 and roi_color.shape[1] > 2:
+                color_std = float(np.mean(np.std(roi_color.astype(float), axis=(0, 1))))
+                if color_std < 10:
+                    reasons.append("Unusually uniform color distribution — inconsistent with natural imagery")
+
+            # 4. Check if region overlaps face area
+            face_overlap = _check_face_overlap(gray, sx, sy, sw, sh)
+            if face_overlap == "face_center":
+                reasons.append("Suspicious patterns in facial region — primary target for deepfake manipulation")
+            elif face_overlap == "face_boundary":
+                reasons.append("Anomaly at face boundary — common artifact from face-swap blending")
+
+    # Fallback if no specific pixel analysis was possible
+    if not reasons:
+        if cy < 0.4 and 0.25 < cx < 0.75:
+            reasons.append("Anomaly in face/head region — common target for deepfake manipulation")
+        elif area_ratio > 0.15:
+            reasons.append("Large area with high activation — widespread manipulation indicators")
+        elif activation > 0.8:
+            reasons.append("Very high model confidence in manipulation — strong artifact signal")
+        else:
+            reasons.append("Statistical anomaly detected by neural network analysis")
+
+    return reasons[0] if len(reasons) == 1 else "; ".join(reasons[:2])
+
+
+def _check_face_overlap(gray, sx, sy, sw, sh) -> str:
+    """Check if a region overlaps with a detected face."""
+    try:
+        face_cascade = cv2.CascadeClassifier(
+            cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+        )
+        faces = face_cascade.detectMultiScale(gray, 1.1, 5, minSize=(30, 30))
+        for (fx, fy, fw, fh) in faces:
+            # Check overlap
+            overlap_x = max(0, min(sx + sw, fx + fw) - max(sx, fx))
+            overlap_y = max(0, min(sy + sh, fy + fh) - max(sy, fy))
+            overlap_area = overlap_x * overlap_y
+            region_area = sw * sh
+            if region_area > 0 and overlap_area / region_area > 0.5:
+                # Check if center or boundary
+                face_cx = fx + fw / 2
+                face_cy = fy + fh / 2
+                region_cx = sx + sw / 2
+                region_cy = sy + sh / 2
+                dist = ((face_cx - region_cx) ** 2 + (face_cy - region_cy) ** 2) ** 0.5
+                face_radius = (fw + fh) / 4
+                if dist < face_radius * 0.5:
+                    return "face_center"
+                else:
+                    return "face_boundary"
+    except Exception:
+        pass
+    return "none"
 
 
 def _describe_region(cx: float, cy: float) -> str:

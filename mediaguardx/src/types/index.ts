@@ -71,7 +71,7 @@ export interface DetectionResult {
     mismatchScore?: number;
     details?: string[];
   };
-  xaiRegions?: Array<{ region: string; confidence: number; description?: string }>;
+  xaiRegions?: Array<{ region: string; confidence: number; description?: string; reason?: string }>;
 }
 
 export interface Anomaly {
