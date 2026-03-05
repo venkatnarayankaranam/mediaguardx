@@ -513,7 +513,7 @@ export default function DetectionResultPage() {
     { id: 'audio', label: 'Audio', icon: Mic, visible: showAudioTab },
     { id: 'fingerprint', label: 'Fingerprint', icon: Fingerprint, visible: true },
     { id: 'compression', label: 'Compression', icon: HardDrive, visible: true },
-    { id: 'emotion', label: 'Emotion Mismatch', icon: Heart, visible: detection.fileType === 'video' },
+    { id: 'emotion', label: 'Emotion', icon: Heart, visible: detection.fileType === 'video' },
     { id: 'sync', label: 'Lip-Sync', icon: Activity, visible: detection.fileType === 'video' },
   ];
 
@@ -738,7 +738,7 @@ export default function DetectionResultPage() {
         {/* Right column: Tabbed analysis panels */}
         <div className="card flex flex-col min-h-0">
           {/* Tab bar */}
-          <div className="flex gap-1 border-b border-slate-800/60 -mx-6 px-6 overflow-x-auto">
+          <div className="flex flex-wrap gap-1 border-b border-slate-800/60 -mx-6 px-6">
             {visibleTabs.map((tab) => {
               const Icon = tab.icon;
               const isActive = activeTab === tab.id;
@@ -747,13 +747,13 @@ export default function DetectionResultPage() {
                 <button
                   key={tab.id}
                   onClick={() => setActiveTab(tab.id)}
-                  className={`flex items-center gap-1.5 px-3 py-2.5 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
+                  className={`flex items-center gap-1.5 px-2.5 py-2.5 text-xs sm:text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
                     isActive
                       ? 'border-indigo-500 text-indigo-400'
                       : 'border-transparent text-slate-500 hover:text-slate-300'
                   }`}
                 >
-                  <Icon className="w-4 h-4" />
+                  <Icon className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                   {tab.label}
                 </button>
               );
