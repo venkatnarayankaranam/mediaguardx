@@ -7,6 +7,9 @@ interface AnalysisResult {
   trustScore: number;
   anomalies: string[];
   timestamp: string;
+  label?: string;
+  status?: string;
+  message?: string;
 }
 
 interface FrameThumbnail {
@@ -102,7 +105,16 @@ export default function CameraMonitoring() {
 
     ws.onmessage = (event) => {
       try {
-        const data: AnalysisResult = JSON.parse(event.data);
+        const raw = JSON.parse(event.data);
+        // Backend sends trustScore/label/status but not anomalies — normalize the shape
+        const data: AnalysisResult = {
+          trustScore: raw.trustScore ?? 50,
+          anomalies: raw.anomalies ?? [],
+          timestamp: raw.timestamp ?? new Date().toISOString(),
+          label: raw.label,
+          status: raw.status,
+          message: raw.message,
+        };
         setCurrentResult(data);
 
         if (canvasRef.current && videoRef.current) {
@@ -274,7 +286,7 @@ export default function CameraMonitoring() {
             )}
 
             {/* Anomaly Alerts */}
-            {isMonitoring && currentResult && currentResult.anomalies.length > 0 && currentResult.trustScore < confidenceThreshold && (
+            {isMonitoring && currentResult && currentResult.anomalies?.length > 0 && currentResult.trustScore < confidenceThreshold && (
               <div className="absolute bottom-4 left-4 right-4">
                 <div className="px-4 py-3 rounded-lg bg-red-500/15 border border-red-500/30 backdrop-blur-sm">
                   <p className="text-sm font-medium text-red-400 mb-1">Anomalies Detected</p>

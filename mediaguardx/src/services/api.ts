@@ -335,4 +335,23 @@ export const getAdminHistory = async (limit = 50, _offset = 0) => {
   return response.data;
 };
 
+// ── Adaptive Learning API ──────────────────────────────────────────
+
+export const getAdaptiveStats = async () => {
+  const response = await api.get('/detect/adaptive/stats');
+  return response.data;
+};
+
+export const submitFeedback = async (detectionId: string, trueLabel: string) => {
+  const response = await api.post(`/detect/${detectionId}/feedback`, {
+    true_label: trueLabel,
+  });
+  return response.data;
+};
+
+export const triggerRetrain = async () => {
+  const response = await api.post('/detect/adaptive/retrain');
+  return response.data;
+};
+
 export default api;

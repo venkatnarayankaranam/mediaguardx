@@ -11,8 +11,12 @@ import {
   HardDrive,
   ShieldAlert,
   Image as ImageIcon,
+  Activity,
+  Heart,
+  ThumbsUp,
+  ThumbsDown,
 } from 'lucide-react';
-import { getDetectionResult, generateReport } from '@/services/api';
+import { getDetectionResult, generateReport, submitFeedback } from '@/services/api';
 import { useToast } from '@/hooks/useToast';
 import Badge from '@/components/ui/Badge';
 import Skeleton from '@/components/ui/Skeleton';
@@ -21,7 +25,7 @@ import MediaPreview from '@/components/MediaPreview';
 import AnomalyCard from '@/components/AnomalyCard';
 import type { DetectionResult } from '@/types';
 
-type TabId = 'anomalies' | 'metadata' | 'audio' | 'fingerprint' | 'compression';
+type TabId = 'anomalies' | 'metadata' | 'audio' | 'fingerprint' | 'compression' | 'emotion' | 'sync';
 
 interface TabDefinition {
   id: TabId;
@@ -272,6 +276,113 @@ function CompressionPanel({ detection }: { detection: DetectionResult }) {
   );
 }
 
+function EmotionPanel({ detection }: { detection: DetectionResult }) {
+  const analysis = detection.emotionMismatch;
+
+  if (!analysis) {
+    return <EmptyTabState message="No emotion mismatch analysis available for this media." />;
+  }
+
+  const score = analysis.score !== undefined
+    ? (analysis.score > 1 ? analysis.score : analysis.score * 100)
+    : undefined;
+  const isMismatch = score !== undefined && score >= 50;
+
+  return (
+    <div className="space-y-4">
+      {analysis.faceEmotion && (
+        <div className="flex items-center justify-between py-2 border-b border-slate-800/60">
+          <span className="text-sm text-slate-400">Face Emotion</span>
+          <span className="text-sm font-medium text-slate-200 capitalize">{analysis.faceEmotion}</span>
+        </div>
+      )}
+
+      {analysis.audioEmotion && (
+        <div className="flex items-center justify-between py-2 border-b border-slate-800/60">
+          <span className="text-sm text-slate-400">Audio Emotion</span>
+          <span className="text-sm font-medium text-slate-200 capitalize">{analysis.audioEmotion}</span>
+        </div>
+      )}
+
+      {score !== undefined && (
+        <div>
+          <div className="flex items-center justify-between text-sm mb-1.5">
+            <span className="text-slate-400">Mismatch Score</span>
+            <span className="font-medium text-slate-200">{Math.round(score)}%</span>
+          </div>
+          <div className="h-2 w-full rounded-full bg-slate-800">
+            <div
+              className="h-2 rounded-full bg-indigo-500 transition-all duration-500"
+              style={{ width: `${Math.min(100, score)}%` }}
+            />
+          </div>
+        </div>
+      )}
+
+      <div className="flex items-center justify-between py-2 border-b border-slate-800/60">
+        <span className="text-sm text-slate-400">Result</span>
+        <Badge variant={isMismatch ? 'danger' : 'success'}>
+          {isMismatch ? 'Mismatch' : 'Consistent'}
+        </Badge>
+      </div>
+    </div>
+  );
+}
+
+function SyncPanel({ detection }: { detection: DetectionResult }) {
+  const analysis = detection.syncAnalysis;
+
+  if (!analysis) {
+    return <EmptyTabState message="No lip-sync analysis available for this media." />;
+  }
+
+  const score = analysis.mismatchScore !== undefined
+    ? (analysis.mismatchScore > 1 ? analysis.mismatchScore : analysis.mismatchScore * 100)
+    : undefined;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between py-2 border-b border-slate-800/60">
+        <span className="text-sm text-slate-400">Lip Sync Mismatch</span>
+        <Badge variant={analysis.lipSyncMismatch ? 'danger' : 'success'}>
+          {analysis.lipSyncMismatch ? 'Yes' : 'No'}
+        </Badge>
+      </div>
+
+      {score !== undefined && (
+        <div>
+          <div className="flex items-center justify-between text-sm mb-1.5">
+            <span className="text-slate-400">Mismatch Score</span>
+            <span className="font-medium text-slate-200">{Math.round(score)}%</span>
+          </div>
+          <div className="h-2 w-full rounded-full bg-slate-800">
+            <div
+              className="h-2 rounded-full bg-indigo-500 transition-all duration-500"
+              style={{ width: `${Math.min(100, score)}%` }}
+            />
+          </div>
+        </div>
+      )}
+
+      {analysis.details && analysis.details.length > 0 && (
+        <div className="mt-4">
+          <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">
+            Details
+          </h4>
+          <ul className="space-y-1.5">
+            {analysis.details.map((detail, index) => (
+              <li key={index} className="text-sm text-slate-300 flex items-start gap-2">
+                <span className="mt-1.5 w-1.5 h-1.5 rounded-full bg-indigo-500 shrink-0" />
+                {detail}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function EmptyTabState({ message }: { message: string }) {
   return (
     <div className="flex flex-col items-center justify-center py-12 text-center">
@@ -292,6 +403,8 @@ export default function DetectionResultPage() {
   const [loading, setLoading] = useState(true);
   const [generatingReport, setGeneratingReport] = useState(false);
   const [activeTab, setActiveTab] = useState<TabId>('anomalies');
+  const [feedbackSubmitted, setFeedbackSubmitted] = useState<string | null>(null);
+  const [submittingFeedback, setSubmittingFeedback] = useState(false);
 
   useEffect(() => {
     if (!id) return;
@@ -358,6 +471,20 @@ export default function DetectionResultPage() {
     }
   }
 
+  async function handleFeedback(label: 'real' | 'fake') {
+    if (!id || submittingFeedback) return;
+    setSubmittingFeedback(true);
+    try {
+      await submitFeedback(id, label);
+      setFeedbackSubmitted(label);
+      toast.success(`Feedback submitted: marked as ${label}`);
+    } catch {
+      toast.error('Failed to submit feedback.');
+    } finally {
+      setSubmittingFeedback(false);
+    }
+  }
+
   if (loading) {
     return <ResultSkeleton />;
   }
@@ -386,6 +513,8 @@ export default function DetectionResultPage() {
     { id: 'audio', label: 'Audio', icon: Mic, visible: showAudioTab },
     { id: 'fingerprint', label: 'Fingerprint', icon: Fingerprint, visible: true },
     { id: 'compression', label: 'Compression', icon: HardDrive, visible: true },
+    { id: 'emotion', label: 'Emotion Mismatch', icon: Heart, visible: detection.fileType === 'video' },
+    { id: 'sync', label: 'Lip-Sync', icon: Activity, visible: detection.fileType === 'video' },
   ];
 
   const visibleTabs = tabs.filter((tab) => tab.visible);
@@ -402,6 +531,10 @@ export default function DetectionResultPage() {
         return <FingerprintPanel detection={detection!} />;
       case 'compression':
         return <CompressionPanel detection={detection!} />;
+      case 'emotion':
+        return <EmotionPanel detection={detection!} />;
+      case 'sync':
+        return <SyncPanel detection={detection!} />;
       default:
         return null;
     }
@@ -465,6 +598,36 @@ export default function DetectionResultPage() {
 
           <div className="card flex justify-center py-8">
             <TrustScoreGauge score={detection.trustScore} size={220} />
+          </div>
+
+          {/* Feedback Buttons — help improve model accuracy */}
+          <div className="card p-4">
+            <p className="text-sm text-slate-400 mb-3">Is this classification correct? Your feedback helps improve the model.</p>
+            {feedbackSubmitted ? (
+              <div className="flex items-center gap-2 text-sm text-emerald-400">
+                <ThumbsUp className="w-4 h-4" />
+                Feedback submitted: marked as <span className="font-medium capitalize">{feedbackSubmitted}</span>
+              </div>
+            ) : (
+              <div className="flex gap-3">
+                <button
+                  onClick={() => handleFeedback('real')}
+                  disabled={submittingFeedback}
+                  className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 hover:bg-emerald-500/20 transition-colors disabled:opacity-50"
+                >
+                  <ThumbsUp className="w-4 h-4" />
+                  Authentic (Real)
+                </button>
+                <button
+                  onClick={() => handleFeedback('fake')}
+                  disabled={submittingFeedback}
+                  className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 transition-colors disabled:opacity-50"
+                >
+                  <ThumbsDown className="w-4 h-4" />
+                  Deepfake (Fake)
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Heatmap display with side-by-side annotations + color legend */}

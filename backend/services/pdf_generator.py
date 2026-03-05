@@ -162,16 +162,24 @@ async def generate_pdf_report(
         anomalies = detection_data.get("anomalies", [])
         if anomalies:
             story.append(Paragraph("Detected Anomalies", heading_style))
-            
+
+            # Style for wrapping long text inside table cells
+            cell_style = ParagraphStyle(
+                'CellWrap',
+                parent=styles['Normal'],
+                fontSize=9,
+                leading=11,
+            )
+
             anomaly_data = [["Type", "Severity", "Description", "Confidence"]]
             for anomaly in anomalies:
                 anomaly_data.append([
-                    anomaly.get("type", "N/A").replace("_", " ").title(),
-                    anomaly.get("severity", "N/A").upper(),
-                    anomaly.get("description", "N/A"),
-                    f"{anomaly.get('confidence', 0):.1f}%"
+                    Paragraph(anomaly.get("type", "N/A").replace("_", " ").title(), cell_style),
+                    Paragraph(anomaly.get("severity", "N/A").upper(), cell_style),
+                    Paragraph(anomaly.get("description", "N/A"), cell_style),
+                    Paragraph(f"{anomaly.get('confidence', 0):.1f}%", cell_style),
                 ])
-            
+
             anomaly_table = Table(anomaly_data, colWidths=[1.5*inch, 0.8*inch, 2.7*inch, 1*inch])
             anomaly_table.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#424242')),

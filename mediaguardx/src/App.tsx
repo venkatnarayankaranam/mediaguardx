@@ -26,6 +26,7 @@ const AdminDashboard = lazy(() => import('@/pages/admin/AdminDashboard'));
 const UserManagement = lazy(() => import('@/pages/admin/UserManagement'));
 const SystemLogs = lazy(() => import('@/pages/admin/SystemLogs'));
 const InvestigatorDashboard = lazy(() => import('@/pages/admin/InvestigatorDashboard'));
+const AdaptiveLearning = lazy(() => import('@/pages/AdaptiveLearning'));
 
 function PageLoader() {
   return (
@@ -86,6 +87,11 @@ function App() {
           <Route path="/history" element={
             <ProtectedRoute>
               <AppLayout><History /></AppLayout>
+            </ProtectedRoute>
+          } />
+          <Route path="/adaptive-learning" element={
+            <ProtectedRoute>
+              <AppLayout><AdaptiveLearning /></AppLayout>
             </ProtectedRoute>
           } />
 

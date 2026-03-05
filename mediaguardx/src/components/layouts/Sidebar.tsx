@@ -1,5 +1,5 @@
 import { Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Camera, History, ChevronLeft, ChevronRight } from 'lucide-react';
+import { LayoutDashboard, Camera, History, Brain, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { useUIStore } from '@/store/uiStore';
 
@@ -7,6 +7,7 @@ const menuItems = [
   { path: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { path: '/camera', label: 'Live Camera', icon: Camera },
   { path: '/history', label: 'History', icon: History },
+  { path: '/adaptive-learning', label: 'Adaptive Learning', icon: Brain },
 ];
 
 export default function Sidebar() {
