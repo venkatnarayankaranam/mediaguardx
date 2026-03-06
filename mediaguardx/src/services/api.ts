@@ -182,18 +182,37 @@ export const getDetectionResult = async (detectionId: string): Promise<Detection
     heatmapUrl = `${apiBaseUrl}${heatmapUrl.startsWith('/') ? '' : '/'}${heatmapUrl}`;
   }
 
-  // Fetch files through the authenticated axios client as blobs
-  // This creates local object URLs so <img>/<video>/<audio> elements work without token exposure
-  const [blobFileUrl, blobHeatmapUrl] = await Promise.all([
-    fileUrl ? fetchAuthenticatedBlobUrl(fileUrl) : Promise.resolve(''),
+  // For images: fetch as blob (small, works well as object URLs)
+  // For video/audio: use token-based streaming URL (supports range requests & seek)
+  const isStreamable = data.fileType === 'video' || data.fileType === 'audio';
+  let resolvedFileUrl = '';
+
+  if (fileUrl) {
+    if (isStreamable) {
+      const { data: { session } } = await supabase.auth.getSession();
+      resolvedFileUrl = `${fileUrl}${fileUrl.includes('?') ? '&' : '?'}token=${session?.access_token || ''}`;
+    } else {
+      resolvedFileUrl = await fetchAuthenticatedBlobUrl(fileUrl);
+    }
+  }
+
+  // Fetch heatmap and thumbnail as blobs
+  let thumbnailRawUrl = data.thumbnailUrl || '';
+  if (thumbnailRawUrl && !thumbnailRawUrl.startsWith('http')) {
+    thumbnailRawUrl = `${apiBaseUrl}${thumbnailRawUrl.startsWith('/') ? '' : '/'}${thumbnailRawUrl}`;
+  }
+
+  const [blobHeatmapUrl, blobThumbnailUrl] = await Promise.all([
     heatmapUrl ? fetchAuthenticatedBlobUrl(heatmapUrl) : Promise.resolve(''),
+    thumbnailRawUrl ? fetchAuthenticatedBlobUrl(thumbnailRawUrl) : Promise.resolve(''),
   ]);
 
   return {
     id: data.id,
     fileName: data.fileName,
     fileType: data.fileType,
-    fileUrl: blobFileUrl,
+    fileUrl: resolvedFileUrl,
+    thumbnailUrl: blobThumbnailUrl || undefined,
     trustScore: data.trustScore,
     status: data.status,
     anomalies: data.anomalies || [],

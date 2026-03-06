@@ -73,6 +73,7 @@ export interface DetectionResult {
   };
   xaiRegions?: Array<{ region: string; confidence: number; description?: string; reason?: string }>;
   scoreBreakdown?: Record<string, { score: number; weight: number }>;
+  thumbnailUrl?: string;
 }
 
 export interface Anomaly {

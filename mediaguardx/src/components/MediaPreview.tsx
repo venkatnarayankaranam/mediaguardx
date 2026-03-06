@@ -1,10 +1,11 @@
 import { useState } from 'react';
-import { Image, Video, Music, ExternalLink, AlertCircle } from 'lucide-react';
+import { Image, Video, Music, ExternalLink, Download, AlertCircle } from 'lucide-react';
 
 interface MediaPreviewProps {
   url: string;
   type: 'image' | 'video' | 'audio';
   fileName: string;
+  thumbnailUrl?: string;
 }
 
 function FallbackIcon({ type }: { type: MediaPreviewProps['type'] }) {
@@ -50,15 +51,42 @@ function ImagePreview({ url, fileName }: { url: string; fileName: string }) {
   );
 }
 
-function VideoPreview({ url, fileName }: { url: string; fileName: string }) {
+function VideoPreview({ url, fileName, thumbnailUrl }: { url: string; fileName: string; thumbnailUrl?: string }) {
   const [error, setError] = useState(false);
 
-  if (error) return <MediaError fileName={fileName} />;
+  // On codec error, show thumbnail fallback instead of generic error
+  if (error) {
+    if (thumbnailUrl) {
+      return (
+        <div className="relative w-full h-full">
+          <img
+            src={thumbnailUrl}
+            alt={`Frame from ${fileName}`}
+            className="w-full h-full object-contain rounded-lg"
+          />
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/40 rounded-lg">
+            <Video className="w-10 h-10 text-white/80 mb-2" />
+            <p className="text-xs text-white/70 mb-2">Video codec not supported for browser playback</p>
+            <a
+              href={url}
+              download={fileName}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs rounded-lg transition-colors"
+            >
+              <Download className="w-3.5 h-3.5" />
+              Download Video
+            </a>
+          </div>
+        </div>
+      );
+    }
+    return <MediaError fileName={fileName} />;
+  }
 
   return (
     <video
       src={url}
       controls
+      poster={thumbnailUrl}
       className="w-full h-full object-contain rounded-lg"
       onError={() => setError(true)}
     >
@@ -83,7 +111,7 @@ function AudioPreview({ url, fileName }: { url: string; fileName: string }) {
   );
 }
 
-export default function MediaPreview({ url, type, fileName }: MediaPreviewProps) {
+export default function MediaPreview({ url, type, fileName, thumbnailUrl }: MediaPreviewProps) {
   if (!url) {
     return (
       <div className="card flex flex-col items-center justify-center aspect-video">
@@ -99,7 +127,7 @@ export default function MediaPreview({ url, type, fileName }: MediaPreviewProps)
   return (
     <div className="card overflow-hidden aspect-video flex items-center justify-center">
       {type === 'image' && <ImagePreview url={url} fileName={fileName} />}
-      {type === 'video' && <VideoPreview url={url} fileName={fileName} />}
+      {type === 'video' && <VideoPreview url={url} fileName={fileName} thumbnailUrl={thumbnailUrl} />}
       {type === 'audio' && <AudioPreview url={url} fileName={fileName} />}
     </div>
   );

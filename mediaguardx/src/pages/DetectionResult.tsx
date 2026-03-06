@@ -594,6 +594,7 @@ export default function DetectionResultPage() {
             url={detection.fileUrl}
             type={detection.fileType}
             fileName={detection.fileName}
+            thumbnailUrl={detection.thumbnailUrl}
           />
 
           <div className="card flex justify-center py-8">

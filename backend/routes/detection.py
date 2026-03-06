@@ -400,24 +400,33 @@ async def _detect_media(
                 "message": "No primary detectors available — results are based on heuristic analysis only and may be less accurate.",
             })
 
-        # Generate heatmap (Grad-CAM if ML model is available, otherwise placeholder)
+        # For video: always extract a frame for thumbnail (independent of ML model)
         heatmap_url = None
+        thumbnail_url = None
         xai_regions = []
+        frame_path = None
+
+        if media_type == "video":
+            frame_path = _extract_video_frame(file_path, detection_id)
+            if frame_path:
+                import shutil
+                thumb_name = f"thumb_{detection_id}.jpg"
+                thumb_dest = os.path.join(settings.heatmaps_dir, thumb_name)
+                os.makedirs(settings.heatmaps_dir, exist_ok=True)
+                try:
+                    shutil.copy2(frame_path, thumb_dest)
+                    thumbnail_url = f"/{settings.heatmaps_dir}/{thumb_name}"
+                    logger.info("Video thumbnail saved: %s", thumb_dest)
+                except OSError as e:
+                    logger.warning("Failed to save video thumbnail: %s", e)
+
+        # Generate heatmap (Grad-CAM if ML model is available, otherwise placeholder)
         try:
             if model_engine.ML_AVAILABLE and model_engine._MODEL is not None:
                 if media_type == "image":
                     heatmap_url, xai_regions = _generate_gradcam(file_path, detection_id)
-                elif media_type == "video":
-                    # Extract a representative frame from video for Grad-CAM
-                    frame_path = _extract_video_frame(file_path, detection_id)
-                    if frame_path:
-                        heatmap_url, xai_regions = _generate_gradcam(frame_path, detection_id)
-                        try:
-                            os.remove(frame_path)
-                        except OSError:
-                            pass
-                    else:
-                        heatmap_url = _generate_heatmap_placeholder(file_path, detection_id)
+                elif media_type == "video" and frame_path:
+                    heatmap_url, xai_regions = _generate_gradcam(frame_path, detection_id)
                 else:
                     heatmap_url = _generate_heatmap_placeholder(file_path, detection_id)
             else:
@@ -425,6 +434,13 @@ async def _detect_media(
             logger.info("Heatmap generated: %s", heatmap_url)
         except Exception as e:
             logger.warning("Heatmap generation failed: %s", e)
+
+        # Clean up extracted frame (thumbnail copy already saved)
+        if frame_path and os.path.exists(frame_path):
+            try:
+                os.remove(frame_path)
+            except OSError:
+                pass
 
         # Store in Supabase
         supabase = get_supabase()
@@ -461,6 +477,8 @@ async def _detect_media(
         file_url = f"{base_url}/api/detect/{detection_id}/file"
         full_heatmap_url = f"{base_url}{heatmap_url}" if heatmap_url else None
 
+        full_thumbnail_url = f"{base_url}{thumbnail_url}" if thumbnail_url else None
+
         return {
             "status": "success",
             "mediaType": media_type,
@@ -468,6 +486,7 @@ async def _detect_media(
             "label": label,
             "anomalies": anomalies,
             "heatmapUrl": full_heatmap_url,
+            "thumbnailUrl": full_thumbnail_url,
             "xaiRegions": xai_regions if xai_regions else [],
             "fileUrl": file_url,
             "reportId": "",
@@ -649,11 +668,19 @@ async def get_detection(
     if heatmap_url and base_url:
         heatmap_url = f"{base_url}{heatmap_url}"
 
+    # Check for video thumbnail (extracted frame saved during upload)
+    thumbnail_url = None
+    if detection.get("media_type") == "video":
+        thumb_path = os.path.join(settings.heatmaps_dir, f"thumb_{detection_id}.jpg")
+        if os.path.exists(thumb_path):
+            thumbnail_url = f"{base_url}/{settings.heatmaps_dir}/thumb_{detection_id}.jpg" if base_url else f"/{settings.heatmaps_dir}/thumb_{detection_id}.jpg"
+
     response = {
         "id": detection["id"],
         "fileName": detection.get("filename", ""),
         "fileType": detection.get("media_type", "image"),
         "fileUrl": file_url,
+        "thumbnailUrl": thumbnail_url,
         "trustScore": detection.get("trust_score", 0),
         "status": _label_to_status(detection.get("label", "Suspicious")),
         "anomalies": detection.get("anomalies", []),
