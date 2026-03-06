@@ -207,6 +207,8 @@ export const getDetectionResult = async (detectionId: string): Promise<Detection
     emotionMismatch: data.emotionMismatch,
     syncAnalysis: data.syncAnalysis,
     xaiRegions: data.xaiRegions,
+    scoreBreakdown: data.scoreBreakdown,
+    sightengineResult: data.sightengineResult,
   };
 };
 

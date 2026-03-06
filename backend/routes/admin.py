@@ -43,7 +43,7 @@ async def get_all_users(
 @router.put("/users/{user_id}/role")
 async def update_user_role(
     user_id: str,
-    role: str = Query(..., regex="^(user|investigator|admin)$"),
+    role: str = Query(..., pattern="^(user|investigator|admin)$"),
     current_user: AuthenticatedUser = Depends(require_admin),
 ):
     """Update a user's role (admin only)."""

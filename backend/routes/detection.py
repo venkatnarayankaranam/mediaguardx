@@ -438,7 +438,10 @@ async def _detect_media(
             "trust_score": trust_score,
             "label": label,
             "anomalies": anomalies,
-            "sightengine_result": sightengine_result.get("raw_response"),
+            "sightengine_result": {
+                **(sightengine_result.get("raw_response") or {}),
+                "_ml_model_score": ml_model_score,
+            },
             "audio_analysis": audio_result if isinstance(audio_result, dict) else None,
             "metadata_analysis": metadata_result if isinstance(metadata_result, dict) else None,
             "fingerprint": fingerprint_result if isinstance(fingerprint_result, dict) else None,
@@ -446,7 +449,6 @@ async def _detect_media(
             "emotion_mismatch": emotion_result if isinstance(emotion_result, dict) else None,
             "sync_analysis": sync_result if isinstance(sync_result, dict) else None,
             "heatmap_url": heatmap_url,
-            "score_breakdown": score_breakdown,
         }
 
         supabase.table("detections").insert(detection_record).execute()
@@ -666,8 +668,30 @@ async def get_detection(
         "syncAnalysis": detection.get("sync_analysis"),
         "sightengineResult": detection.get("sightengine_result"),
         "xaiRegions": detection.get("xai_regions", []),
-        "scoreBreakdown": detection.get("score_breakdown"),
     }
+
+    # Recompute score breakdown from stored analyzer data
+    sightengine_raw = detection.get("sightengine_result")
+    se_score = None
+    stored_ml_score = None
+    if sightengine_raw:
+        deepfake_val = sightengine_raw.get("type", {}).get("deepfake")
+        if deepfake_val is not None:
+            se_score = round((1 - deepfake_val) * 100, 2)
+        stored_ml_score = sightengine_raw.get("_ml_model_score")
+
+    _, breakdown = _compute_composite_score(
+        ml_model_score=stored_ml_score,
+        sightengine_score=se_score,
+        metadata_result=detection.get("metadata_analysis") or {},
+        fingerprint_result=detection.get("fingerprint") or {},
+        compression_result=detection.get("compression_info") or {},
+        audio_result=detection.get("audio_analysis") or {},
+        emotion_result=detection.get("emotion_mismatch") or {},
+        sync_result=detection.get("sync_analysis") or {},
+    )
+    if breakdown:
+        response["scoreBreakdown"] = breakdown
 
     return {k: v for k, v in response.items() if v is not None}
 
@@ -818,7 +842,7 @@ async def trigger_retrain(
 @router.post("/adaptive/upload")
 async def upload_training_media(
     file: UploadFile = File(...),
-    label: str = Query(..., regex="^(fake|real)$"),
+    label: str = Query(..., pattern="^(fake|real)$"),
     current_user: AuthenticatedUser = Depends(get_current_user),
 ):
     """Upload a labeled media file directly for adaptive learning training data."""
