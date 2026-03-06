@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Brain,
   BarChart3,
@@ -10,8 +10,10 @@ import {
   Sparkles,
   AlertCircle,
   Database,
+  Upload,
+  FileImage,
 } from 'lucide-react';
-import { getAdaptiveStats, triggerRetrain } from '@/services/api';
+import { getAdaptiveStats, triggerRetrain, uploadTrainingMedia } from '@/services/api';
 import { useAuthStore } from '@/store/authStore';
 import { useToast } from '@/hooks/useToast';
 
@@ -38,6 +40,9 @@ export default function AdaptiveLearning() {
   const [loading, setLoading] = useState(true);
   const [retraining, setRetraining] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadLabel, setUploadLabel] = useState<'fake' | 'real'>('fake');
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const canRetrain = profile?.role === 'admin' || profile?.role === 'investigator';
 
@@ -76,6 +81,28 @@ export default function AdaptiveLearning() {
     } finally {
       setRetraining(false);
     }
+  };
+
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    setUploading(true);
+    let successCount = 0;
+    for (const file of Array.from(files)) {
+      try {
+        await uploadTrainingMedia(file, uploadLabel);
+        successCount++;
+      } catch (err) {
+        console.error('Upload failed:', err);
+        toast.error(`Failed to upload ${file.name}`);
+      }
+    }
+    if (successCount > 0) {
+      toast.success(`Uploaded ${successCount} file(s) labeled as "${uploadLabel}" for training.`);
+      await fetchStats();
+    }
+    setUploading(false);
+    if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   const formatDate = (dateStr: string | null | undefined) => {
@@ -246,6 +273,74 @@ export default function AdaptiveLearning() {
               <span className={`text-sm font-medium ${stats.ready_to_retrain ? 'text-emerald-400' : 'text-amber-400'}`}>
                 {stats.ready_to_retrain ? 'Yes' : 'No'}
               </span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Upload Training Media */}
+      {!loading && canRetrain && (
+        <div className="card rounded-xl p-6">
+          <h2 className="text-lg font-semibold text-slate-200 mb-4 flex items-center gap-2">
+            <Upload className="w-5 h-5 text-indigo-400" />
+            Upload Training Media
+          </h2>
+          <p className="text-sm text-slate-400 mb-4">
+            Upload labeled images or videos to improve model accuracy. Select a label, then choose files.
+          </p>
+          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
+            <div className="flex gap-2">
+              <button
+                onClick={() => setUploadLabel('fake')}
+                className={`px-4 py-2 rounded-lg text-sm font-medium border transition-colors ${
+                  uploadLabel === 'fake'
+                    ? 'bg-red-500/20 text-red-400 border-red-500/40'
+                    : 'bg-slate-800 text-slate-400 border-slate-700 hover:border-slate-600'
+                }`}
+              >
+                Fake / Deepfake
+              </button>
+              <button
+                onClick={() => setUploadLabel('real')}
+                className={`px-4 py-2 rounded-lg text-sm font-medium border transition-colors ${
+                  uploadLabel === 'real'
+                    ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40'
+                    : 'bg-slate-800 text-slate-400 border-slate-700 hover:border-slate-600'
+                }`}
+              >
+                Real / Authentic
+              </button>
+            </div>
+            <div className="flex-1">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*,video/*"
+                multiple
+                onChange={handleUpload}
+                className="hidden"
+                id="training-upload"
+              />
+              <label
+                htmlFor="training-upload"
+                className={`inline-flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-medium cursor-pointer transition-colors ${
+                  uploading
+                    ? 'bg-slate-700 text-slate-400 cursor-not-allowed'
+                    : 'bg-indigo-500/15 text-indigo-400 border border-indigo-500/30 hover:bg-indigo-500/25'
+                }`}
+              >
+                {uploading ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    Uploading...
+                  </>
+                ) : (
+                  <>
+                    <FileImage className="w-4 h-4" />
+                    Choose Files
+                  </>
+                )}
+              </label>
             </div>
           </div>
         </div>

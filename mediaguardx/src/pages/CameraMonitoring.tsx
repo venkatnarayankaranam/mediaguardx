@@ -10,6 +10,9 @@ interface AnalysisResult {
   label?: string;
   status?: string;
   message?: string;
+  reason?: string;
+  source?: string;
+  sightengineScore?: number;
 }
 
 interface FrameThumbnail {
@@ -17,6 +20,8 @@ interface FrameThumbnail {
   dataUrl: string;
   trustScore: number;
   timestamp: string;
+  reason?: string;
+  source?: string;
 }
 
 const FRAME_RATE_OPTIONS = [
@@ -114,6 +119,9 @@ export default function CameraMonitoring() {
           label: raw.label,
           status: raw.status,
           message: raw.message,
+          reason: raw.reason,
+          source: raw.source,
+          sightengineScore: raw.sightengineScore,
         };
         setCurrentResult(data);
 
@@ -125,6 +133,8 @@ export default function CameraMonitoring() {
               dataUrl: thumbnail,
               trustScore: data.trustScore,
               timestamp: data.timestamp,
+              reason: data.reason,
+              source: data.source,
             },
             ...prev,
           ].slice(0, 20));
@@ -285,16 +295,28 @@ export default function CameraMonitoring() {
               </div>
             )}
 
-            {/* Anomaly Alerts */}
-            {isMonitoring && currentResult && currentResult.anomalies?.length > 0 && currentResult.trustScore < confidenceThreshold && (
+            {/* Analysis Reason Overlay */}
+            {isMonitoring && currentResult?.reason && (
               <div className="absolute bottom-4 left-4 right-4">
-                <div className="px-4 py-3 rounded-lg bg-red-500/15 border border-red-500/30 backdrop-blur-sm">
-                  <p className="text-sm font-medium text-red-400 mb-1">Anomalies Detected</p>
-                  <ul className="text-xs text-red-300 space-y-0.5">
-                    {currentResult.anomalies.slice(0, 3).map((anomaly, i) => (
-                      <li key={i}>{anomaly}</li>
-                    ))}
-                  </ul>
+                <div className={`px-4 py-3 rounded-lg backdrop-blur-sm border ${
+                  currentResult.trustScore >= 70
+                    ? 'bg-emerald-500/10 border-emerald-500/30'
+                    : currentResult.trustScore >= 40
+                    ? 'bg-amber-500/10 border-amber-500/30'
+                    : 'bg-red-500/10 border-red-500/30'
+                }`}>
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className={`text-xs font-semibold uppercase tracking-wide ${
+                      currentResult.source === 'sightengine' ? 'text-blue-400' : 'text-purple-400'
+                    }`}>
+                      {currentResult.source === 'sightengine' ? 'Sightengine API' : 'ML Model'}
+                    </span>
+                  </div>
+                  <p className={`text-xs ${
+                    currentResult.trustScore >= 70 ? 'text-emerald-300' : currentResult.trustScore >= 40 ? 'text-amber-300' : 'text-red-300'
+                  }`}>
+                    {currentResult.reason}
+                  </p>
                 </div>
               </div>
             )}
@@ -414,10 +436,22 @@ export default function CameraMonitoring() {
                 <p className={`text-4xl font-bold ${getTrustScoreColor(currentResult.trustScore)}`}>
                   {currentResult.trustScore.toFixed(1)}%
                 </p>
+                {currentResult.source && (
+                  <p className={`text-[10px] font-semibold uppercase tracking-wide mt-1 ${
+                    currentResult.source === 'sightengine' ? 'text-blue-400' : 'text-purple-400'
+                  }`}>
+                    {currentResult.source === 'sightengine' ? 'Sightengine API' : currentResult.source === 'ml_model' ? 'ML Model' : 'Fallback'}
+                  </p>
+                )}
                 <p className="text-xs text-slate-500 mt-1">
                   {new Date(currentResult.timestamp).toLocaleTimeString()}
                 </p>
               </div>
+              {currentResult.reason && (
+                <p className="text-xs text-slate-400 mt-3 text-center leading-relaxed border-t border-slate-800 pt-3">
+                  {currentResult.reason}
+                </p>
+              )}
             </div>
           )}
         </div>
@@ -445,6 +479,13 @@ export default function CameraMonitoring() {
                   <p className={`text-sm font-semibold ${getTrustScoreColor(thumb.trustScore)}`}>
                     {thumb.trustScore.toFixed(1)}%
                   </p>
+                  {thumb.source && (
+                    <p className={`text-[8px] font-semibold uppercase ${
+                      thumb.source === 'sightengine' ? 'text-blue-400' : 'text-purple-400'
+                    }`}>
+                      {thumb.source === 'sightengine' ? 'API' : 'ML'}
+                    </p>
+                  )}
                   <p className="text-[10px] text-slate-500">
                     {new Date(thumb.timestamp).toLocaleTimeString()}
                   </p>

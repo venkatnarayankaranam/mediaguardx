@@ -600,6 +600,43 @@ export default function DetectionResultPage() {
             <TrustScoreGauge score={detection.trustScore} size={220} />
           </div>
 
+          {/* Score Breakdown — shows individual analyzer contributions */}
+          {detection.scoreBreakdown && Object.keys(detection.scoreBreakdown).length > 0 && (
+            <div className="card p-5">
+              <h3 className="text-sm font-semibold text-slate-300 mb-3">Score Breakdown</h3>
+              <div className="space-y-2.5">
+                {Object.entries(detection.scoreBreakdown)
+                  .sort(([, a], [, b]) => b.weight - a.weight)
+                  .map(([name, { score, weight }]) => {
+                    const label = {
+                      ml_model: 'ML Model (EfficientNet-B0)',
+                      sightengine: 'Sightengine API',
+                      metadata: 'Metadata Analysis',
+                      fingerprint: 'Fingerprint',
+                      compression: 'Compression',
+                      audio: 'Audio Analysis',
+                      emotion: 'Emotion Mismatch',
+                      sync: 'Lip-Sync',
+                    }[name] || name;
+                    const barColor = score >= 70 ? 'bg-emerald-500' : score >= 40 ? 'bg-amber-500' : 'bg-red-500';
+                    return (
+                      <div key={name}>
+                        <div className="flex items-center justify-between text-xs mb-1">
+                          <span className="text-slate-400">{label} <span className="text-slate-600">({weight}%)</span></span>
+                          <span className={`font-semibold ${score >= 70 ? 'text-emerald-400' : score >= 40 ? 'text-amber-400' : 'text-red-400'}`}>
+                            {score.toFixed(1)}%
+                          </span>
+                        </div>
+                        <div className="h-1.5 w-full rounded-full bg-slate-800">
+                          <div className={`h-1.5 rounded-full ${barColor} transition-all duration-500`} style={{ width: `${Math.min(100, score)}%` }} />
+                        </div>
+                      </div>
+                    );
+                  })}
+              </div>
+            </div>
+          )}
+
           {/* Feedback Buttons — help improve model accuracy */}
           <div className="card p-4">
             <p className="text-sm text-slate-400 mb-3">Is this classification correct? Your feedback helps improve the model.</p>

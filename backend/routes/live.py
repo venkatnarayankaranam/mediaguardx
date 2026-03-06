@@ -16,6 +16,30 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _get_frame_reason(trust_score: float, source: str, deepfake_prob: float = 0) -> str:
+    """Generate a human-readable reason for why a frame received its trust score."""
+    if source == "sightengine":
+        if trust_score >= 85:
+            return "Sightengine API: No deepfake indicators detected. Frame appears authentic."
+        elif trust_score >= 70:
+            return f"Sightengine API: Minor anomalies detected (deepfake probability: {deepfake_prob:.0%}). Likely authentic."
+        elif trust_score >= 40:
+            return f"Sightengine API: Moderate deepfake indicators found (deepfake probability: {deepfake_prob:.0%}). Frame is suspicious."
+        else:
+            return f"Sightengine API: Strong deepfake indicators detected (deepfake probability: {deepfake_prob:.0%}). Likely manipulated."
+    elif source == "ml_model":
+        if trust_score >= 85:
+            return "ML Model (EfficientNet-B0): High confidence authentic — no manipulation patterns detected."
+        elif trust_score >= 70:
+            return "ML Model (EfficientNet-B0): Frame appears authentic with minor uncertainty."
+        elif trust_score >= 40:
+            return "ML Model (EfficientNet-B0): Suspicious patterns detected — possible face manipulation or generation artifacts."
+        else:
+            return "ML Model (EfficientNet-B0): Strong manipulation patterns detected — likely AI-generated or deepfake."
+    else:
+        return "No detector available — score is a placeholder. Results may not be accurate."
+
+
 async def _analyze_frame_with_model(image_bytes: bytes) -> dict:
     """Analyze a camera frame using the local ML model as fallback.
 
@@ -144,6 +168,7 @@ async def websocket_frame_analysis(websocket: WebSocket, token: str = Query(None
                     # Sightengine not configured -> use local ML model
                     logger.info("Sightengine API not configured; falling back to ML model")
                     ml = await _analyze_frame_with_model(image_bytes)
+                    reason = _get_frame_reason(ml["trust_score"], ml["source"])
                     await websocket.send_json({
                         "frameId": frame_id,
                         "timestamp": timestamp,
@@ -151,6 +176,8 @@ async def websocket_frame_analysis(websocket: WebSocket, token: str = Query(None
                         "label": ml["label"],
                         "status": "analyzed_ml" if ml["source"] == "ml_model" else "no_api",
                         "message": "Analyzed with local ML model" if ml["source"] == "ml_model" else "No detector available; score is placeholder",
+                        "reason": reason,
+                        "source": ml["source"],
                     })
                     continue
 
@@ -164,17 +191,23 @@ async def websocket_frame_analysis(websocket: WebSocket, token: str = Query(None
                 if result["api_available"] and result["trust_score"] is not None:
                     trust_score = result["trust_score"]
                     label = "Authentic" if trust_score >= 70 else "Suspicious" if trust_score >= 40 else "Deepfake"
+                    deepfake_prob = result.get("deepfake_probability", 0)
+                    reason = _get_frame_reason(trust_score, "sightengine", deepfake_prob)
                     await websocket.send_json({
                         "frameId": frame_id,
                         "timestamp": timestamp,
                         "trustScore": trust_score,
                         "label": label,
                         "status": "analyzed",
+                        "reason": reason,
+                        "source": "sightengine",
+                        "sightengineScore": trust_score,
                     })
                 else:
                     # API returned but gave no usable score -> ML fallback
                     logger.warning("Sightengine API returned no result; falling back to ML model")
                     ml = await _analyze_frame_with_model(image_bytes)
+                    reason = _get_frame_reason(ml["trust_score"], ml["source"])
                     await websocket.send_json({
                         "frameId": frame_id,
                         "timestamp": timestamp,
@@ -182,6 +215,8 @@ async def websocket_frame_analysis(websocket: WebSocket, token: str = Query(None
                         "label": ml["label"],
                         "status": "analyzed_ml" if ml["source"] == "ml_model" else "api_error",
                         "message": "API returned no result; analyzed with local ML model" if ml["source"] == "ml_model" else "API returned no result; score is placeholder",
+                        "reason": reason,
+                        "source": ml["source"],
                     })
 
             except Exception as e:
@@ -193,6 +228,7 @@ async def websocket_frame_analysis(websocket: WebSocket, token: str = Query(None
                         ml = await _analyze_frame_with_model(image_bytes)
                 except Exception:
                     pass  # keep the default ml dict
+                reason = _get_frame_reason(ml["trust_score"], ml["source"])
                 await websocket.send_json({
                     "frameId": frame_id,
                     "timestamp": timestamp,
@@ -200,6 +236,8 @@ async def websocket_frame_analysis(websocket: WebSocket, token: str = Query(None
                     "label": ml["label"],
                     "status": "analyzed_ml" if ml["source"] == "ml_model" else "error",
                     "message": str(e),
+                    "reason": reason,
+                    "source": ml["source"],
                 })
 
     except WebSocketDisconnect:

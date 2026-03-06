@@ -120,12 +120,11 @@ def _compute_composite_score(
     audio_result: dict,
     emotion_result: dict,
     sync_result: dict,
-) -> float:
+) -> tuple[float, dict]:
     """Compute weighted composite trust score from all available detectors.
 
-    The retrained ML model (EfficientNet-B0, 95% val accuracy) is the primary
-    signal (40%). Sightengine provides a secondary signal (20%).
-    Heuristic analyzers provide supporting signals (40%).
+    Returns (composite_score, score_breakdown) where score_breakdown maps
+    each analyzer name to its individual 0-100 score and weight.
     """
     scores = {}
     total_weight = 0.0
@@ -155,7 +154,7 @@ def _compute_composite_score(
         total_weight += WEIGHTS[name]
 
     if total_weight == 0:
-        return 50.0  # Fallback — uncertain
+        return 50.0, {}
 
     composite = sum(scores.get(k, 0) * WEIGHTS.get(k, 0) for k in scores) / total_weight
 
@@ -179,7 +178,38 @@ def _compute_composite_score(
         composite = min(composite, 65.0)
         logger.info("No primary detector available — capping score at 65")
 
-    return round(min(100, max(0, composite)), 2)
+    # Build breakdown for frontend
+    score_breakdown = {}
+    for name, score_val in scores.items():
+        score_breakdown[name] = {
+            "score": round(score_val, 1),
+            "weight": int(WEIGHTS.get(name, 0) * 100),
+        }
+
+    return round(min(100, max(0, composite)), 2), score_breakdown
+
+
+def _extract_video_frame(video_path: str, detection_id: str) -> str | None:
+    """Extract a representative frame from a video for Grad-CAM analysis."""
+    try:
+        import cv2
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            return None
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        # Pick a frame ~25% into the video (avoids black intro frames)
+        target_frame = max(1, total_frames // 4)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
+        ret, frame = cap.read()
+        cap.release()
+        if not ret or frame is None:
+            return None
+        frame_path = os.path.join(settings.upload_dir, f"_frame_{detection_id}.jpg")
+        cv2.imwrite(frame_path, frame)
+        return frame_path
+    except Exception as e:
+        logger.warning("Video frame extraction failed: %s", e)
+        return None
 
 
 def _get_label(score: float) -> str:
@@ -349,7 +379,7 @@ async def _detect_media(
                 logger.warning("ML model prediction failed: %s", e)
 
         # Compute composite trust score
-        trust_score = _compute_composite_score(
+        trust_score, score_breakdown = _compute_composite_score(
             ml_model_score,
             sightengine_result.get("trust_score"),
             metadata_result,
@@ -374,8 +404,22 @@ async def _detect_media(
         heatmap_url = None
         xai_regions = []
         try:
-            if media_type == "image" and model_engine.ML_AVAILABLE and model_engine._MODEL is not None:
-                heatmap_url, xai_regions = _generate_gradcam(file_path, detection_id)
+            if model_engine.ML_AVAILABLE and model_engine._MODEL is not None:
+                if media_type == "image":
+                    heatmap_url, xai_regions = _generate_gradcam(file_path, detection_id)
+                elif media_type == "video":
+                    # Extract a representative frame from video for Grad-CAM
+                    frame_path = _extract_video_frame(file_path, detection_id)
+                    if frame_path:
+                        heatmap_url, xai_regions = _generate_gradcam(frame_path, detection_id)
+                        try:
+                            os.remove(frame_path)
+                        except OSError:
+                            pass
+                    else:
+                        heatmap_url = _generate_heatmap_placeholder(file_path, detection_id)
+                else:
+                    heatmap_url = _generate_heatmap_placeholder(file_path, detection_id)
             else:
                 heatmap_url = _generate_heatmap_placeholder(file_path, detection_id)
             logger.info("Heatmap generated: %s", heatmap_url)
@@ -402,6 +446,7 @@ async def _detect_media(
             "emotion_mismatch": emotion_result if isinstance(emotion_result, dict) else None,
             "sync_analysis": sync_result if isinstance(sync_result, dict) else None,
             "heatmap_url": heatmap_url,
+            "score_breakdown": score_breakdown,
         }
 
         supabase.table("detections").insert(detection_record).execute()
@@ -425,6 +470,7 @@ async def _detect_media(
             "fileUrl": file_url,
             "reportId": "",
             "detectionId": detection_id,
+            "scoreBreakdown": score_breakdown,
         }
 
     except ValueError as e:
@@ -620,6 +666,7 @@ async def get_detection(
         "syncAnalysis": detection.get("sync_analysis"),
         "sightengineResult": detection.get("sightengine_result"),
         "xaiRegions": detection.get("xai_regions", []),
+        "scoreBreakdown": detection.get("score_breakdown"),
     }
 
     return {k: v for k, v in response.items() if v is not None}
@@ -766,6 +813,36 @@ async def trigger_retrain(
 
     from services.model_engine import trigger_adaptive_retrain
     return trigger_adaptive_retrain()
+
+
+@router.post("/adaptive/upload")
+async def upload_training_media(
+    file: UploadFile = File(...),
+    label: str = Query(..., regex="^(fake|real)$"),
+    current_user: AuthenticatedUser = Depends(get_current_user),
+):
+    """Upload a labeled media file directly for adaptive learning training data."""
+    if current_user.role not in ("admin", "investigator"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admins and investigators can upload training data",
+        )
+
+    from services.model_engine import submit_feedback
+    import shutil
+
+    # Save the uploaded file to a temp location
+    os.makedirs(settings.upload_dir, exist_ok=True)
+    dest = os.path.join(settings.upload_dir, f"train_{uuid.uuid4().hex[:8]}_{file.filename}")
+    with open(dest, "wb") as f:
+        shutil.copyfileobj(file.file, f)
+
+    result = submit_feedback(dest, label, f"upload_{uuid.uuid4().hex[:8]}")
+    return {
+        "status": "success",
+        "message": f"File uploaded and labeled as '{label}' for training.",
+        "feedback_samples": result.get("feedback_samples", 0),
+    }
 
 
 def _log_activity(supabase, user_id: str, action: str, resource_type: str, resource_id: str):
