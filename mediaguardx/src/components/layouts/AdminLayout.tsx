@@ -29,7 +29,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
               </button>
               <Link to="/admin" className="flex items-center gap-2.5">
                 <div className="w-8 h-8 bg-gradient-admin rounded-lg flex items-center justify-center shadow-glow-admin">
-                  <Shield className="w-4.5 h-4.5 text-white" />
+                  <Shield className="w-5 h-5 text-white" />
                 </div>
                 <div className="hidden sm:block">
                   <span className="text-lg font-bold text-gradient-admin">MediaGuardX</span>

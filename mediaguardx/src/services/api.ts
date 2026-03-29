@@ -6,6 +6,7 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api'
 
 const api = axios.create({
   baseURL: API_BASE_URL,
+  timeout: 60000, // 60 second timeout
   headers: { 'Content-Type': 'application/json' },
 });
 
@@ -182,18 +183,12 @@ export const getDetectionResult = async (detectionId: string): Promise<Detection
     heatmapUrl = `${apiBaseUrl}${heatmapUrl.startsWith('/') ? '' : '/'}${heatmapUrl}`;
   }
 
-  // For images: fetch as blob (small, works well as object URLs)
-  // For video/audio: use token-based streaming URL (supports range requests & seek)
-  const isStreamable = data.fileType === 'video' || data.fileType === 'audio';
   let resolvedFileUrl = '';
 
   if (fileUrl) {
-    if (isStreamable) {
-      const { data: { session } } = await supabase.auth.getSession();
-      resolvedFileUrl = `${fileUrl}${fileUrl.includes('?') ? '&' : '?'}token=${session?.access_token || ''}`;
-    } else {
-      resolvedFileUrl = await fetchAuthenticatedBlobUrl(fileUrl);
-    }
+    // Fetch as blob for all media types to avoid leaking tokens in URLs
+    const blobUrl = await fetchAuthenticatedBlobUrl(fileUrl);
+    resolvedFileUrl = blobUrl;
   }
 
   // Fetch heatmap and thumbnail as blobs
@@ -359,6 +354,15 @@ export const getAdminHistory = async (limit = 50, _offset = 0) => {
 // ── Adaptive Learning API ──────────────────────────────────────────
 
 export const getAdaptiveStats = async () => {
+  if (isDemoMode) {
+    return {
+      totalSamples: 0,
+      retrainCount: 0,
+      lastRetrain: null,
+      accuracy: 0,
+    };
+  }
+
   const response = await api.get('/detect/adaptive/stats');
   return response.data;
 };
@@ -371,11 +375,19 @@ export const submitFeedback = async (detectionId: string, trueLabel: string) => 
 };
 
 export const triggerRetrain = async () => {
+  if (isDemoMode) {
+    return { message: 'Retrain triggered successfully (demo mode)' };
+  }
+
   const response = await api.post('/detect/adaptive/retrain');
   return response.data;
 };
 
 export const uploadTrainingMedia = async (file: File, label: 'fake' | 'real') => {
+  if (isDemoMode) {
+    return { message: 'Training media uploaded successfully (demo mode)' };
+  }
+
   const formData = new FormData();
   formData.append('file', file);
   const response = await api.post(`/detect/adaptive/upload?label=${label}`, formData, {

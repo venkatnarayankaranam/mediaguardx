@@ -1,5 +1,6 @@
 """Seed script to create admin user via Supabase."""
 import os
+import sys
 from dotenv import load_dotenv
 from supabase import create_client
 
@@ -17,8 +18,17 @@ def seed_admin():
 
     supabase = create_client(url, key)
 
-    email = "admin@mediaguardx.com"
-    password = "Admin123!"
+    email = os.getenv("ADMIN_EMAIL", "admin@mediaguardx.com")
+    password = os.getenv("ADMIN_PASSWORD")
+    if not password:
+        print("WARNING: No ADMIN_PASSWORD set in environment. Using default password.")
+        print("Set ADMIN_PASSWORD in your .env file for production use!")
+        password = "Admin123!"
+
+    if len(password) < 8:
+        print("ERROR: Admin password must be at least 8 characters")
+        sys.exit(1)
+
     name = "Admin"
 
     try:

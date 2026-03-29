@@ -4,6 +4,8 @@ from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 import logging
 
+from config import settings
+
 logger = logging.getLogger(__name__)
 
 
@@ -29,14 +31,15 @@ async def app_exception_handler(request: Request, exc: AppException):
 
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     """Handle validation exceptions."""
-    errors = exc.errors()
-    logger.warning(f"Validation error: {errors}")
+    logger.warning(f"Validation error: {exc.errors()}")
+    content = {"error": "Validation error"}
+    if settings.node_env == "development":
+        content["errors"] = exc.errors()
+    else:
+        content["errors"] = [{"msg": "Invalid input"}]
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        content={
-            "error": "Validation error",
-            "details": errors
-        }
+        content=content,
     )
 
 
@@ -46,7 +49,6 @@ async def generic_exception_handler(request: Request, exc: Exception):
     logger.error(f"Unhandled exception: {error_msg}", exc_info=True)
 
     # Only expose error details in development mode
-    from config import settings
     content = {"error": "Internal server error"}
     if settings.node_env == "development":
         content["detail"] = error_msg

@@ -3,6 +3,7 @@
 Compares facial expressions with audio emotional tone to detect
 inconsistencies that may indicate deepfake manipulation.
 """
+import asyncio
 import logging
 from typing import Optional
 
@@ -124,12 +125,8 @@ def _analyze_audio_emotion(file_path: str) -> Optional[str]:
         return None
 
 
-async def analyze_emotion_mismatch(file_path: str, media_type: str) -> Optional[dict]:
-    """Detect emotion mismatch between face and audio.
-
-    Returns dict matching frontend emotionMismatch interface:
-        { faceEmotion: str, audioEmotion: str, score: float }
-    """
+def _analyze_emotion_mismatch_sync(file_path: str, media_type: str) -> Optional[dict]:
+    """Synchronous implementation of emotion mismatch detection."""
     if media_type not in ("video", "image"):
         return None
 
@@ -155,3 +152,12 @@ async def analyze_emotion_mismatch(file_path: str, media_type: str) -> Optional[
         "audioEmotion": audio_emotion,
         "score": round(mismatch_score, 1),
     }
+
+
+async def analyze_emotion_mismatch(file_path: str, media_type: str) -> Optional[dict]:
+    """Detect emotion mismatch between face and audio.
+
+    Returns dict matching frontend emotionMismatch interface:
+        { faceEmotion: str, audioEmotion: str, score: float }
+    """
+    return await asyncio.to_thread(_analyze_emotion_mismatch_sync, file_path, media_type)

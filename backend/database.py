@@ -20,7 +20,7 @@ def get_supabase() -> Client:
 async def connect_db():
     """Initialize Supabase connection."""
     get_supabase()
-    logger.info(f"Connected to Supabase: {settings.supabase_url}")
+    logger.info("Connected to Supabase successfully")
 
 
 async def close_db():

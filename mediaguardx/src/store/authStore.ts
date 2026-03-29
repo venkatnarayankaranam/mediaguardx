@@ -1,8 +1,11 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { supabase, isDemoMode } from '@/lib/supabase';
+import api from '@/services/api';
 import type { User, UserRole } from '@/types';
 import type { Session } from '@supabase/supabase-js';
+
+let _authSubscription: { unsubscribe: () => void } | null = null;
 
 interface Profile {
   id: string;
@@ -140,7 +143,12 @@ export const useAuthStore = create<AuthState>()(
           set({ initialized: true });
         }
 
-        supabase.auth.onAuthStateChange(async (event, session) => {
+        if (_authSubscription) {
+          _authSubscription.unsubscribe();
+          _authSubscription = null;
+        }
+
+        const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
           if (event === 'SIGNED_IN' && session) {
             const user: User = {
               id: session.user.id,
@@ -156,6 +164,7 @@ export const useAuthStore = create<AuthState>()(
             set({ session });
           }
         });
+        _authSubscription = subscription;
       },
 
       login: async (email: string, password: string) => {
@@ -259,17 +268,8 @@ export const useAuthStore = create<AuthState>()(
         if (!session) return;
 
         try {
-          // Fetch profile via backend API to avoid RLS recursion on profiles table
-          const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
-          const response = await fetch(`${API_BASE_URL}/auth/me`, {
-            headers: {
-              'Authorization': `Bearer ${session.access_token}`,
-            },
-          });
-
-          if (!response.ok) throw new Error('Failed to fetch profile');
-
-          const data = await response.json();
+          const response = await api.get('/auth/me');
+          const data = response.data;
           if (data) {
             const profile: Profile = {
               id: data.id,

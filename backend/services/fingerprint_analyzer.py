@@ -3,6 +3,7 @@
 Identifies which tool or technique was likely used to generate a deepfake
 by analyzing characteristic artifacts left by known generation methods.
 """
+import asyncio
 import logging
 import os
 from typing import Optional
@@ -23,7 +24,6 @@ except Exception:
 
 try:
     from PIL import Image as PILImage
-    from PIL.ExifTags import Base as ExifBase
     PIL_AVAILABLE = True
 except Exception:
     PIL_AVAILABLE = False
@@ -185,15 +185,15 @@ def _check_gan_indicators(file_path: str) -> dict:
         return {}
 
     try:
-        img = PILImage.open(file_path)
-        w, h = img.size
-        is_gan_size = (w, h) in GAN_DIMENSIONS
+        with PILImage.open(file_path) as img:
+            w, h = img.size
+            is_gan_size = (w, h) in GAN_DIMENSIONS
 
-        # Check EXIF
-        exif = img.getexif()
-        has_camera = False
-        if exif:
-            has_camera = bool(exif.get(0x010F) or exif.get(0x0110))  # Make, Model
+            # Check EXIF
+            exif = img.getexif()
+            has_camera = False
+            if exif:
+                has_camera = bool(exif.get(0x010F) or exif.get(0x0110))  # Make, Model
 
         # Estimate JPEG quality from file size
         file_size = os.path.getsize(file_path)
@@ -214,12 +214,8 @@ def _check_gan_indicators(file_path: str) -> dict:
         return {}
 
 
-async def analyze_fingerprint(file_path: str, media_type: str) -> Optional[dict]:
-    """Identify the likely source/tool of a deepfake.
-
-    Returns dict matching frontend fingerprint interface:
-        { source: str|None, probability: float }
-    """
+def _analyze_fingerprint_sync(file_path: str, media_type: str) -> dict:
+    """Synchronous implementation of fingerprint analysis."""
     if media_type == "audio":
         return {"source": None, "probability": 0.0}
 
@@ -283,3 +279,12 @@ async def analyze_fingerprint(file_path: str, media_type: str) -> Optional[dict]
         "source": best_source if best_score > 30 else None,
         "probability": round(best_score, 1),
     }
+
+
+async def analyze_fingerprint(file_path: str, media_type: str) -> Optional[dict]:
+    """Identify the likely source/tool of a deepfake.
+
+    Returns dict matching frontend fingerprint interface:
+        { source: str|None, probability: float }
+    """
+    return await asyncio.to_thread(_analyze_fingerprint_sync, file_path, media_type)

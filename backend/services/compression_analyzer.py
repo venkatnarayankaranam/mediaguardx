@@ -3,6 +3,7 @@
 Detects compression artifacts and estimates the social media platform
 a file may have been shared through based on compression signatures.
 """
+import asyncio
 import logging
 import os
 from pathlib import Path
@@ -44,15 +45,15 @@ def _estimate_jpeg_quality(file_path: str) -> Optional[float]:
     try:
         file_size = os.path.getsize(file_path)
         if PIL_AVAILABLE:
-            img = Image.open(file_path)
-            w, h = img.size
-            # Estimate quality from compression ratio
-            uncompressed = w * h * 3
-            if uncompressed > 0:
-                ratio = file_size / uncompressed
-                # Map ratio to approximate quality (0-100)
-                quality = min(100, max(0, ratio * 500))
-                return quality
+            with Image.open(file_path) as img:
+                w, h = img.size
+                # Estimate quality from compression ratio
+                uncompressed = w * h * 3
+                if uncompressed > 0:
+                    ratio = file_size / uncompressed
+                    # Map ratio to approximate quality (0-100)
+                    quality = min(100, max(0, ratio * 500))
+                    return quality
     except Exception:
         pass
     return None
@@ -114,12 +115,8 @@ def _detect_blocking_artifacts(file_path: str) -> float:
         return 0.0
 
 
-async def analyze_compression(file_path: str, media_type: str) -> Optional[dict]:
-    """Analyze compression artifacts and identify potential social media source.
-
-    Returns dict matching frontend compressionInfo interface:
-        { platform: str|None, compressionRatio: float, evidence: list[str] }
-    """
+def _analyze_compression_sync(file_path: str, media_type: str) -> Optional[dict]:
+    """Synchronous implementation of compression analysis."""
     evidence = []
     detected_platform = None
 
@@ -138,29 +135,29 @@ async def analyze_compression(file_path: str, media_type: str) -> Optional[dict]
 
         if PIL_AVAILABLE:
             try:
-                img = Image.open(file_path)
-                w, h = img.size
-                uncompressed = w * h * 3
-                comp_ratio = file_size / uncompressed if uncompressed > 0 else 1.0
+                with Image.open(file_path) as img:
+                    w, h = img.size
+                    uncompressed = w * h * 3
+                    comp_ratio = file_size / uncompressed if uncompressed > 0 else 1.0
 
-                evidence.append(f"Image dimensions: {w}x{h}")
-                evidence.append(f"Compression ratio: {comp_ratio:.4f}")
+                    evidence.append(f"Image dimensions: {w}x{h}")
+                    evidence.append(f"Compression ratio: {comp_ratio:.4f}")
 
-                # Match against platform signatures (check min + max dimensions)
-                for platform, sig in PLATFORM_SIGNATURES.items():
-                    min_w = sig.get("min_width", 0)
-                    if min_w <= w <= sig["max_width"] and h <= sig["max_height"]:
-                        q_low, q_high = sig["quality_range"]
-                        if quality and q_low <= quality <= q_high:
-                            detected_platform = platform
-                            evidence.append(f"Dimensions and quality consistent with {platform}")
-                            break
+                    # Match against platform signatures (check min + max dimensions)
+                    for platform, sig in PLATFORM_SIGNATURES.items():
+                        min_w = sig.get("min_width", 0)
+                        if min_w <= w <= sig["max_width"] and h <= sig["max_height"]:
+                            q_low, q_high = sig["quality_range"]
+                            if quality and q_low <= quality <= q_high:
+                                detected_platform = platform
+                                evidence.append(f"Dimensions and quality consistent with {platform}")
+                                break
 
-                return {
-                    "platform": detected_platform,
-                    "compressionRatio": round(comp_ratio, 4),
-                    "evidence": evidence,
-                }
+                    return {
+                        "platform": detected_platform,
+                        "compressionRatio": round(comp_ratio, 4),
+                        "evidence": evidence,
+                    }
             except Exception:
                 pass
 
@@ -210,3 +207,12 @@ async def analyze_compression(file_path: str, media_type: str) -> Optional[dict]
         "compressionRatio": 0.0,
         "evidence": evidence,
     }
+
+
+async def analyze_compression(file_path: str, media_type: str) -> Optional[dict]:
+    """Analyze compression artifacts and identify potential social media source.
+
+    Returns dict matching frontend compressionInfo interface:
+        { platform: str|None, compressionRatio: float, evidence: list[str] }
+    """
+    return await asyncio.to_thread(_analyze_compression_sync, file_path, media_type)

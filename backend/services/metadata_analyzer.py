@@ -4,6 +4,7 @@ Extracts and analyzes file metadata (EXIF, video metadata) to find
 tampering indicators like missing camera info, irregular timestamps,
 and suspicious compression artifacts.
 """
+import asyncio
 import logging
 import os
 import struct
@@ -33,19 +34,19 @@ def _extract_image_exif(file_path: str) -> dict:
         return {}
 
     try:
-        img = Image.open(file_path)
-        exif_data = img.getexif()
-        if not exif_data:
-            return {}
+        with Image.open(file_path) as img:
+            exif_data = img.getexif()
+            if not exif_data:
+                return {}
 
-        result = {}
-        for tag_id, value in exif_data.items():
-            tag_name = TAGS.get(tag_id, str(tag_id))
-            try:
-                result[tag_name] = str(value)
-            except Exception:
-                pass
-        return result
+            result = {}
+            for tag_id, value in exif_data.items():
+                tag_name = TAGS.get(tag_id, str(tag_id))
+                try:
+                    result[tag_name] = str(value)
+                except Exception:
+                    pass
+            return result
     except Exception:
         return {}
 
@@ -79,13 +80,8 @@ def _extract_video_metadata(file_path: str) -> dict:
         return {}
 
 
-async def analyze_metadata(file_path: str, media_type: str) -> Optional[dict]:
-    """Analyze file metadata for deepfake indicators.
-
-    Returns dict matching frontend metadataAnalysis interface:
-        { missingCamera: bool, irregularTimestamps: bool,
-          suspiciousCompression: bool, details: list[str] }
-    """
+def _analyze_metadata_sync(file_path: str, media_type: str) -> dict:
+    """Synchronous implementation of metadata analysis."""
     details = []
     missing_camera = False
     irregular_timestamps = False
@@ -180,3 +176,13 @@ async def analyze_metadata(file_path: str, media_type: str) -> Optional[dict]:
         "suspiciousCompression": suspicious_compression,
         "details": details,
     }
+
+
+async def analyze_metadata(file_path: str, media_type: str) -> Optional[dict]:
+    """Analyze file metadata for deepfake indicators.
+
+    Returns dict matching frontend metadataAnalysis interface:
+        { missingCamera: bool, irregularTimestamps: bool,
+          suspiciousCompression: bool, details: list[str] }
+    """
+    return await asyncio.to_thread(_analyze_metadata_sync, file_path, media_type)

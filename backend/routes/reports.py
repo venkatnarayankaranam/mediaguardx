@@ -9,6 +9,8 @@ from services.pdf_generator import generate_pdf_report
 import logging
 import os
 import uuid
+from datetime import datetime, timezone
+from config import settings
 
 security = HTTPBearer(auto_error=False)
 
@@ -81,13 +83,20 @@ async def generate_report(
         "tamper_proof_hash": tamper_proof_hash,
     }
 
-    supabase.table("reports").insert(report_record).execute()
+    try:
+        supabase.table("reports").insert(report_record).execute()
+    except Exception as e:
+        logger.error(f"Failed to save report record: {e}")
+        # Clean up the orphaned PDF
+        if os.path.exists(pdf_path):
+            os.remove(pdf_path)
+        raise HTTPException(status_code=500, detail="Failed to save report")
 
     return {
         "id": report_id,
         "detectionId": detection_id,
         "pdfUrl": f"/api/report/{report_id}/download",
-        "createdAt": report_record.get("created_at"),
+        "createdAt": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -146,8 +155,14 @@ async def download_report(
     if not os.path.exists(report["pdf_path"]):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="PDF file not found")
 
+    pdf_path = report["pdf_path"]
+    reports_dir = os.path.abspath(settings.reports_dir)
+    abs_pdf_path = os.path.abspath(pdf_path)
+    if not abs_pdf_path.startswith(reports_dir):
+        raise HTTPException(status_code=403, detail="Access denied")
+
     return FileResponse(
-        report["pdf_path"],
+        pdf_path,
         media_type="application/pdf",
         filename=f"report_{report_id}.pdf",
     )

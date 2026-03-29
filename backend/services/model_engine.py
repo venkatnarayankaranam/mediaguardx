@@ -9,7 +9,7 @@ import json
 import os
 import shutil
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -38,6 +38,17 @@ _MODEL = None
 _DEVICE = None
 _CLASS_TO_IDX = None
 _TRANSFORM = None
+
+# Cached CascadeClassifier for face detection
+_FACE_CASCADE = None
+
+def _get_face_cascade():
+    global _FACE_CASCADE
+    if _FACE_CASCADE is None:
+        _FACE_CASCADE = cv2.CascadeClassifier(
+            cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+        )
+    return _FACE_CASCADE
 
 
 def _default_model_path() -> Path:
@@ -116,14 +127,19 @@ def _get_real_class_index() -> int:
 
 def _predict_image_prob_real(image_path: str) -> float:
     """Return probability that image is REAL as a float in [0,1]."""
-    if _MODEL is None:
+    with _MODEL_LOCK:
+        model = _MODEL
+        device = _DEVICE
+        class_to_idx = _CLASS_TO_IDX
+    if model is None:
         raise RuntimeError("Model not loaded")
 
-    img = Image.open(image_path).convert("RGB")
-    inp = _TRANSFORM(img).unsqueeze(0).to(_DEVICE)
-    _MODEL.eval()
+    with Image.open(image_path) as img:
+        img = img.convert("RGB")
+        inp = _TRANSFORM(img).unsqueeze(0).to(device)
+    model.eval()
     with torch.no_grad():
-        logits = _MODEL(inp)
+        logits = model(inp)
         probs = F.softmax(logits, dim=1).cpu().numpy()[0]
 
     idx_real = _get_real_class_index()
@@ -132,13 +148,17 @@ def _predict_image_prob_real(image_path: str) -> float:
 
 def _predict_image_from_pil(pil_img) -> float:
     """Return probability that a PIL image is REAL as a float in [0,1]."""
-    if _MODEL is None:
+    with _MODEL_LOCK:
+        model = _MODEL
+        device = _DEVICE
+        class_to_idx = _CLASS_TO_IDX
+    if model is None:
         raise RuntimeError("Model not loaded")
 
-    inp = _TRANSFORM(pil_img.convert("RGB")).unsqueeze(0).to(_DEVICE)
-    _MODEL.eval()
+    inp = _TRANSFORM(pil_img.convert("RGB")).unsqueeze(0).to(device)
+    model.eval()
     with torch.no_grad():
-        logits = _MODEL(inp)
+        logits = model(inp)
         probs = F.softmax(logits, dim=1).cpu().numpy()[0]
 
     idx_real = _get_real_class_index()
@@ -147,6 +167,10 @@ def _predict_image_from_pil(pil_img) -> float:
 
 def _predict_video_prob_real(video_path: str, max_frames: int = 12) -> float:
     """Extract up to max_frames evenly spaced frames and average real-probability."""
+    with _MODEL_LOCK:
+        model = _MODEL
+        device = _DEVICE
+        class_to_idx = _CLASS_TO_IDX
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise RuntimeError("Unable to open video")
@@ -186,13 +210,19 @@ def _generate_gradcam(image_path: str, detection_id: str) -> tuple:
 
     Returns (heatmap_url, xai_regions) where xai_regions is a list of dicts.
     """
-    if not ML_AVAILABLE or _MODEL is None:
+    with _MODEL_LOCK:
+        model = _MODEL
+        device = _DEVICE
+        class_to_idx = _CLASS_TO_IDX
+    if not ML_AVAILABLE or model is None:
         return _generate_heatmap_placeholder(image_path, detection_id), []
 
     try:
-        img = Image.open(image_path).convert("RGB")
-        original_size = img.size  # (W, H)
-        inp = _TRANSFORM(img).unsqueeze(0).to(_DEVICE)
+        with Image.open(image_path) as img:
+            img = img.convert("RGB")
+            original_size = img.size  # (W, H)
+            inp = _TRANSFORM(img).unsqueeze(0).to(device)
+            original_np = np.array(img.resize(original_size))
         inp.requires_grad_(True)
 
         # Hook into the last convolutional block (features[-1] for EfficientNet)
@@ -206,18 +236,18 @@ def _generate_gradcam(image_path: str, detection_id: str) -> tuple:
             gradients.append(grad_output[0])
 
         # EfficientNet-B0: features[-1] is the last block before avgpool
-        target_layer = _MODEL.features[-1]
+        target_layer = model.features[-1]
         fh = target_layer.register_forward_hook(forward_hook)
         bh = target_layer.register_full_backward_hook(backward_hook)
 
         # Forward pass (need gradients so no torch.no_grad)
-        _MODEL.eval()
-        output = _MODEL(inp)
+        model.eval()
+        output = model(inp)
         idx_fake = 1 - _get_real_class_index()  # highlight fake-class activation
         score = output[0, idx_fake]
 
         # Backward pass
-        _MODEL.zero_grad()
+        model.zero_grad()
         score.backward()
 
         fh.remove()
@@ -243,8 +273,11 @@ def _generate_gradcam(image_path: str, detection_id: str) -> tuple:
         heatmap_colored = cv2.applyColorMap(np.uint8(255 * cam_resized), cv2.COLORMAP_JET)
         heatmap_colored = cv2.cvtColor(heatmap_colored, cv2.COLOR_BGR2RGB)
 
-        original_np = np.array(img.resize(original_size))
         overlay = (0.5 * original_np + 0.5 * heatmap_colored).astype(np.uint8)
+
+        del inp, output, score
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
 
         # Save heatmap
         os.makedirs(settings.heatmaps_dir, exist_ok=True)
@@ -391,9 +424,7 @@ def _diagnose_region(
 def _check_face_overlap(gray, sx, sy, sw, sh) -> str:
     """Check if a region overlaps with a detected face."""
     try:
-        face_cascade = cv2.CascadeClassifier(
-            cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-        )
+        face_cascade = _get_face_cascade()
         faces = face_cascade.detectMultiScale(gray, 1.1, 5, minSize=(30, 30))
         for (fx, fy, fw, fh) in faces:
             # Check overlap
@@ -450,6 +481,7 @@ def _generate_heatmap_placeholder(file_path: str, detection_id: str) -> str:
 
 _FEEDBACK_DIR = None
 _ADAPTIVE_LOCK = threading.Lock()
+_MODEL_LOCK = threading.Lock()
 _MIN_FEEDBACK_FOR_RETRAIN = 10  # minimum new samples before retraining
 
 
@@ -487,7 +519,7 @@ def submit_feedback(image_path: str, true_label: str, detection_id: str) -> dict
     if not src.exists():
         return {"status": "error", "message": "Source image not found"}
 
-    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     dest = dest_folder / f"{timestamp}_{detection_id}{src.suffix}"
     shutil.copy2(str(src), str(dest))
 
@@ -497,9 +529,9 @@ def submit_feedback(image_path: str, true_label: str, detection_id: str) -> dict
         "detection_id": detection_id,
         "true_label": true_label,
         "image_path": str(dest),
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
-    with open(log_path, "a") as f:
+    with open(log_path, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry) + "\n")
 
     # Count available feedback
@@ -706,7 +738,7 @@ def _do_adaptive_retrain(feedback_dir: Path):
         "num_classes": num_classes,
         "class_to_idx": {"fake": 0, "real": 1},
         "val_accuracy": ckpt.get("val_accuracy"),
-        "retrained_at": datetime.utcnow().isoformat(),
+        "retrained_at": datetime.now(timezone.utc).isoformat(),
         "feedback_samples": len(feedback_dataset),
     }
 
@@ -718,9 +750,10 @@ def _do_adaptive_retrain(feedback_dir: Path):
     torch.save(new_ckpt, model_path)
 
     # Hot-swap the model in memory
-    _MODEL = model
-    _DEVICE = device
-    _CLASS_TO_IDX = new_ckpt["class_to_idx"]
+    with _MODEL_LOCK:
+        _MODEL = model
+        _DEVICE = device
+        _CLASS_TO_IDX = new_ckpt["class_to_idx"]
 
     logger.info(
         "=== Adaptive retraining complete: %d samples, model hot-swapped ===",

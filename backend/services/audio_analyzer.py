@@ -3,6 +3,7 @@
 Analyzes audio tracks for signs of voice cloning, robotic tone, and
 frequency-domain anomalies using librosa.
 """
+import asyncio
 import logging
 import os
 from pathlib import Path
@@ -18,13 +19,8 @@ except Exception:
     LIBROSA_AVAILABLE = False
 
 
-async def analyze_audio(file_path: str, media_type: str) -> Optional[dict]:
-    """Analyze audio content for deepfake indicators.
-
-    Works on audio files directly, or extracts audio track from video files.
-    Returns dict matching frontend audioAnalysis interface:
-        { cloned: bool, score: float, details: list[str] }
-    """
+def _analyze_audio_sync(file_path: str, media_type: str) -> Optional[dict]:
+    """Synchronous implementation of audio analysis (CPU-bound)."""
     if not LIBROSA_AVAILABLE:
         logger.info("librosa not available; skipping audio analysis.")
         return None
@@ -95,3 +91,13 @@ async def analyze_audio(file_path: str, media_type: str) -> Optional[dict]:
     except Exception as e:
         logger.warning("Audio analysis failed: %s", e)
         return None
+
+
+async def analyze_audio(file_path: str, media_type: str) -> Optional[dict]:
+    """Analyze audio content for deepfake indicators.
+
+    Works on audio files directly, or extracts audio track from video files.
+    Returns dict matching frontend audioAnalysis interface:
+        { cloned: bool, score: float, details: list[str] }
+    """
+    return await asyncio.to_thread(_analyze_audio_sync, file_path, media_type)

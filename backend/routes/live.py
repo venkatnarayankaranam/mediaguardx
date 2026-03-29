@@ -153,7 +153,7 @@ async def websocket_frame_analysis(websocket: WebSocket, token: str = Query(None
                 continue
 
             frame_id = f"frame_{uuid.uuid4().hex[:8]}"
-            timestamp = datetime.utcnow().isoformat()
+            timestamp = datetime.now(datetime.timezone.utc).isoformat()
 
             image_bytes = None
             try:
@@ -235,7 +235,7 @@ async def websocket_frame_analysis(websocket: WebSocket, token: str = Query(None
                     "trustScore": ml["trust_score"],
                     "label": ml["label"],
                     "status": "analyzed_ml" if ml["source"] == "ml_model" else "error",
-                    "message": str(e),
+                    "message": "An error occurred during frame analysis",
                     "reason": reason,
                     "source": ml["source"],
                 })

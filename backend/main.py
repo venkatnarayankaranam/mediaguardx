@@ -1,7 +1,11 @@
 """Main FastAPI application entry point."""
+import asyncio
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.middleware import SlowAPIMiddleware
 import logging
 from contextlib import asynccontextmanager
 import os
@@ -12,6 +16,8 @@ from middleware.error_handler import setup_error_handlers
 from middleware.rate_limiter import setup_rate_limiting
 from routes import auth, detection, history, reports, admin, live
 from services.model_engine import load_model_if_available
+
+APP_VERSION = "2.0.0"
 
 # Configure logging
 logging.basicConfig(
@@ -27,7 +33,7 @@ async def lifespan(app: FastAPI):
     logger.info("Starting MediaGuardX backend...")
     await connect_db()
     logger.info("Supabase connected")
-    if load_model_if_available():
+    if await asyncio.to_thread(load_model_if_available):
         logger.info("ML model loaded — Grad-CAM heatmaps enabled")
     else:
         logger.warning("ML model not loaded — using placeholder heatmaps")
@@ -40,7 +46,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="MediaGuardX API",
     description="Scalable and Autonomous Framework for Deepfake Defense",
-    version="2.0.0",
+    version=APP_VERSION,
     lifespan=lifespan,
 )
 
@@ -53,8 +59,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept"],
 )
 
 # Setup error handlers
@@ -62,6 +68,7 @@ setup_error_handlers(app)
 
 # Setup rate limiting
 setup_rate_limiting(app)
+app.add_middleware(SlowAPIMiddleware)
 
 # Static file serving for heatmaps
 os.makedirs(settings.heatmaps_dir, exist_ok=True)
@@ -81,7 +88,7 @@ async def root():
     """Root endpoint."""
     return {
         "message": "MediaGuardX API",
-        "version": "2.0.0",
+        "version": APP_VERSION,
         "status": "operational",
         "auth": "Supabase",
         "detection": "Sightengine + Heuristic Analyzers",

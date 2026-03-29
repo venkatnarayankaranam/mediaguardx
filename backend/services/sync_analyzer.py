@@ -3,6 +3,7 @@
 Detects lip-sync mismatches by comparing audio onset times with
 facial motion in video content.
 """
+import asyncio
 import logging
 from typing import Optional
 
@@ -101,12 +102,8 @@ def _detect_audio_onsets(file_path: str) -> list:
         return []
 
 
-async def analyze_sync(file_path: str, media_type: str) -> Optional[dict]:
-    """Analyze voice-face synchronization.
-
-    Returns dict matching frontend syncAnalysis interface:
-        { lipSyncMismatch: bool, mismatchScore: float, details: list[str] }
-    """
+def _analyze_sync_sync(file_path: str, media_type: str) -> Optional[dict]:
+    """Synchronous implementation of voice-face sync analysis."""
     if media_type != "video":
         return None
 
@@ -170,3 +167,12 @@ async def analyze_sync(file_path: str, media_type: str) -> Optional[dict]:
         "mismatchScore": round(mismatch_score, 1),
         "details": details,
     }
+
+
+async def analyze_sync(file_path: str, media_type: str) -> Optional[dict]:
+    """Analyze voice-face synchronization.
+
+    Returns dict matching frontend syncAnalysis interface:
+        { lipSyncMismatch: bool, mismatchScore: float, details: list[str] }
+    """
+    return await asyncio.to_thread(_analyze_sync_sync, file_path, media_type)

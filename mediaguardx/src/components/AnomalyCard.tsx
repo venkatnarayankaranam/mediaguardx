@@ -26,6 +26,7 @@ const TYPE_LABELS: Record<Anomaly['type'], string> = {
   audio_sync_mismatch: 'Audio Sync Mismatch',
   metadata_tampering: 'Metadata Tampering',
   model_prediction: 'Model Prediction',
+  compression: 'Compression Artifacts',
   general: 'General',
 };
 

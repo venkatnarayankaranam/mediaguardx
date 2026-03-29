@@ -18,7 +18,7 @@ from services.fingerprint_analyzer import analyze_fingerprint
 from services import model_engine
 from services.model_engine import _generate_heatmap_placeholder, _generate_gradcam
 from config import settings
-from datetime import datetime
+from datetime import datetime, timezone
 import asyncio
 import logging
 import os
@@ -496,7 +496,7 @@ async def _detect_media(
 
     except ValueError as e:
         logger.error(f"ValueError: {e}")
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid input provided")
     except Exception as e:
         logger.error(f"Error in detection: {e}", exc_info=True)
         raise HTTPException(
@@ -610,10 +610,14 @@ async def detect_from_url(
     except httpx.HTTPStatusError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Failed to download: HTTP {e.response.status_code}")
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Failed to download URL: {str(e)}")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Failed to download or process the URL")
 
     content_type = resp.headers.get("content-type", "")
     content = resp.content
+
+    MAX_DOWNLOAD_SIZE = settings.max_file_size_mb * 1024 * 1024
+    if len(content) > MAX_DOWNLOAD_SIZE:
+        raise HTTPException(status_code=413, detail=f"File too large. Maximum size is {settings.max_file_size_mb}MB")
 
     if not content or len(content) < 1024:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Downloaded file is too small or empty")
@@ -685,7 +689,7 @@ async def get_detection(
         "status": _label_to_status(detection.get("label", "Suspicious")),
         "anomalies": detection.get("anomalies", []),
         "heatmapUrl": heatmap_url,
-        "createdAt": detection.get("created_at", datetime.utcnow().isoformat()),
+        "createdAt": detection.get("created_at", datetime.now(timezone.utc).isoformat()),
         "metadata": {"fileSize": detection.get("file_size", 0)},
         "audioAnalysis": detection.get("audio_analysis"),
         "metadataAnalysis": detection.get("metadata_analysis"),
@@ -777,6 +781,13 @@ async def get_detection_file(
     file_path = detection.get("file_path", "")
     if not file_path or not os.path.exists(file_path):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")
+
+    # Validate file_path is within allowed directories
+    upload_dir = os.path.abspath(settings.upload_dir)
+    heatmaps_dir = os.path.abspath(settings.heatmaps_dir)
+    abs_file_path = os.path.abspath(file_path)
+    if not (abs_file_path.startswith(upload_dir) or abs_file_path.startswith(heatmaps_dir)):
+        raise HTTPException(status_code=403, detail="Access denied")
 
     media_type = detection.get("media_type", "image")
     content_type_map = {"image": "image/jpeg", "video": "video/mp4", "audio": "audio/mpeg"}
@@ -880,13 +891,14 @@ async def upload_training_media(
         )
 
     from services.model_engine import submit_feedback
-    import shutil
 
-    # Save the uploaded file to a temp location
-    os.makedirs(settings.upload_dir, exist_ok=True)
-    dest = os.path.join(settings.upload_dir, f"train_{uuid.uuid4().hex[:8]}_{file.filename}")
-    with open(dest, "wb") as f:
-        shutil.copyfileobj(file.file, f)
+    # Validate file type
+    allowed_types = ["image/jpeg", "image/png", "image/webp", "video/mp4", "video/avi"]
+    if file.content_type not in allowed_types:
+        raise HTTPException(status_code=400, detail="Unsupported file type")
+
+    # Save the uploaded file using the safe handler
+    dest = await save_uploaded_file(file, settings.upload_dir)
 
     result = submit_feedback(dest, label, f"upload_{uuid.uuid4().hex[:8]}")
     return {

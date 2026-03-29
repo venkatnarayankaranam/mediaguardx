@@ -12,7 +12,7 @@ export default function ProgressBar({ value, max = 100, color, className = '', s
 
   return (
     <div className={`w-full ${className}`}>
-      <div className="h-2 bg-slate-800 rounded-full overflow-hidden">
+      <div role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} className="h-2 bg-slate-800 rounded-full overflow-hidden">
         <div className={`h-full rounded-full transition-all duration-500 ${barColor}`} style={{ width: `${pct}%` }} />
       </div>
       {showLabel && (

@@ -1,15 +1,18 @@
 """File handling utilities."""
 import os
+import pathlib
 import uuid
 from pathlib import Path
 from typing import Tuple
 from fastapi import UploadFile
 from config import settings
 
+_BACKEND_ROOT = pathlib.Path(__file__).resolve().parent.parent
+
 # Create directories if they don't exist
-os.makedirs(settings.upload_dir, exist_ok=True)
-os.makedirs(settings.reports_dir, exist_ok=True)
-os.makedirs(settings.heatmaps_dir, exist_ok=True)
+os.makedirs(_BACKEND_ROOT / settings.upload_dir, exist_ok=True)
+os.makedirs(_BACKEND_ROOT / settings.reports_dir, exist_ok=True)
+os.makedirs(_BACKEND_ROOT / settings.heatmaps_dir, exist_ok=True)
 
 
 ALLOWED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"}
@@ -74,8 +77,9 @@ async def save_uploaded_file(file: UploadFile, media_type: str, user_id: str) ->
 
 def get_file_path_for_detection(file_path: str) -> str:
     """Get relative file path for storage in database."""
-    # Store relative path from upload directory
-    if file_path.startswith(settings.upload_dir):
-        return file_path
+    abs_path = os.path.abspath(file_path)
+    upload_dir = os.path.abspath(settings.upload_dir)
+    if abs_path.startswith(upload_dir):
+        return os.path.relpath(abs_path, os.path.dirname(upload_dir))
     return file_path
 

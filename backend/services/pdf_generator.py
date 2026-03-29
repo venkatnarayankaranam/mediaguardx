@@ -1,14 +1,16 @@
 """PDF report generation service."""
-from reportlab.lib.pagesizes import letter, A4
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import inch
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
-from reportlab.lib import colors
-from reportlab.lib.enums import TA_CENTER, TA_LEFT
-from reportlab.pdfgen import canvas
-import qrcode
-from io import BytesIO
-from PIL import Image as PILImage
+try:
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import inch, mm
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT
+    import qrcode
+    from io import BytesIO
+    PDF_AVAILABLE = True
+except ImportError:
+    PDF_AVAILABLE = False
 from datetime import datetime
 from pathlib import Path
 from config import settings
@@ -46,10 +48,12 @@ async def generate_pdf_report(
     case_id: str
 ) -> tuple[str, str]:
     """Generate tamper-proof PDF report.
-    
+
     Returns:
         tuple: (pdf_path, tamper_proof_hash)
     """
+    if not PDF_AVAILABLE:
+        raise ImportError("PDF generation requires 'reportlab' and 'qrcode' packages. Install them with: pip install reportlab qrcode[pil]")
     try:
         # Create reports directory if it doesn't exist
         reports_path = Path(settings.reports_dir)
@@ -96,7 +100,7 @@ async def generate_pdf_report(
         story.append(Spacer(1, 0.2*inch))
         
         # Report metadata
-        report_date = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+        report_date = datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         
         metadata_data = [
             ["Case ID:", case_id],
@@ -128,7 +132,7 @@ async def generate_pdf_report(
             ["Filename:", detection_data.get("filename", "N/A")],
             ["Media Type:", detection_data.get("media_type", "N/A").upper()],
             ["File Size:", f"{detection_data.get('file_size', 0) / 1024:.2f} KB"],
-            ["Analysis Date:", detection_data.get("created_at", datetime.utcnow()).strftime("%Y-%m-%d %H:%M:%S UTC") if isinstance(detection_data.get("created_at"), datetime) else str(detection_data.get("created_at", "N/A"))],
+            ["Analysis Date:", detection_data.get("created_at", datetime.now(datetime.timezone.utc)).strftime("%Y-%m-%d %H:%M:%S UTC") if isinstance(detection_data.get("created_at"), datetime) else str(detection_data.get("created_at", "N/A"))],
         ]
         
         media_table = Table(media_data, colWidths=[2*inch, 4*inch])

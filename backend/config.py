@@ -1,5 +1,5 @@
 """Configuration settings for MediaGuardX backend."""
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional
 
 
@@ -32,9 +32,14 @@ class Settings(BaseSettings):
     # Rate Limiting
     rate_limit_per_minute: int = 60
 
-    class Config:
-        env_file = ".env"
-        case_sensitive = False
+    model_config = SettingsConfigDict(env_file=".env", case_sensitive=False)
 
 
-settings = Settings()
+try:
+    settings = Settings()
+except Exception as e:
+    import sys
+    print(f"ERROR: Failed to load configuration. Make sure .env file exists in the backend directory.")
+    print(f"Copy .env.example to .env and fill in your values.")
+    print(f"Details: {e}")
+    sys.exit(1)

@@ -17,6 +17,10 @@ export default function AdminRoute({ children }: { children: React.ReactNode }) 
     return <Navigate to="/admin/login" state={{ from: location }} replace />;
   }
 
+  if (profile?.is_active === false) {
+    return <Navigate to="/login" state={{ message: "Your account has been deactivated." }} replace />;
+  }
+
   if (profile?.role !== 'admin' && profile?.role !== 'investigator') {
     return <Navigate to="/admin/login" replace />;
   }
